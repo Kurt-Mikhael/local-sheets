@@ -184,6 +184,34 @@ button:disabled { cursor: not-allowed; opacity: .6; }
   .sidebar { display: none; }
   .account-label { display: none; }
   .conflict-banner { align-items: stretch; flex-direction: column; }
+
+  .spreadsheet-host [data-u-comp="headerbar"] {
+    overflow: visible !important;
+  }
+  .spreadsheet-host [data-u-comp="ribbon-toolbar"] {
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap !important;
+    justify-content: flex-start !important;
+  }
+  .spreadsheet-host [data-u-comp="ribbon-toolbar"] > div {
+    flex-shrink: 0 !important;
+  }
+  .spreadsheet-host [data-u-comp="ribbon-toolbar-more"] {
+    display: none !important;
+  }
+
+  .spreadsheet-host [data-u-comp="mobile-ribbon-toolbar"] {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+  .spreadsheet-host [data-u-comp="mobile-ribbon-toolbar"] > div {
+    flex-shrink: 0 !important;
+  }
+  .spreadsheet-host [data-u-comp="mobile-ribbon"] {
+    overflow-x: hidden;
+  }
 }
 @media (max-width: 640px) {
   .topbar { padding: 0 8px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
