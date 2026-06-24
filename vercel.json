@@ -1,4 +1,14 @@
 {
-  "installCommand": "pnpm install"
+  "installCommand": "pnpm install",
+  "buildCommand": "pnpm --filter fe build",
+  "outputDirectory": "packages/fe/dist",
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index.ts" }
+  ],
+  "functions": {
+    "api/index.ts": {
+      "memory": 256,
+      "maxDuration": 30
+    }
+  }
 }
-
