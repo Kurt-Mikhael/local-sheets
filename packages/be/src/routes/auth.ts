@@ -7,17 +7,12 @@ import { attachSessionCookie, createSession } from '../lib/session'
 import { clearSession } from '../lib/session'
 import { authSchema } from '../../../shared/src/schemas'
 
-function requestKey(req: import('express').Request): string {
-  const forwarded = req.headers['x-forwarded-for']
-  return (typeof forwarded === 'string' ? forwarded.split(',')[0]?.trim() : undefined) ?? 'unknown'
-}
-
 export const authRouter = Router()
 
 authRouter.post('/login', async (req, res) => {
   try {
     assertMutationRequest(req)
-    const rate = authRateLimiter.consume(`login:${requestKey(req)}`)
+    const rate = authRateLimiter.consume(`login:${req.ip ?? 'unknown'}`)
     if (!rate.allowed) {
       res.status(429)
         .set('Retry-After', String(rate.retryAfterSeconds))
@@ -45,7 +40,7 @@ authRouter.post('/login', async (req, res) => {
 authRouter.post('/register', async (req, res) => {
   try {
     assertMutationRequest(req)
-    const rate = authRateLimiter.consume(`register:${requestKey(req)}`)
+    const rate = authRateLimiter.consume(`register:${req.ip ?? 'unknown'}`)
     if (!rate.allowed) {
       res.status(429)
         .set('Retry-After', String(rate.retryAfterSeconds))
