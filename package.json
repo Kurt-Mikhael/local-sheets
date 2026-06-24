@@ -1,0 +1,52 @@
+{
+  "name": "offline-spreadsheet-next",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "dev": "next dev --webpack",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "db:migrate": "node --env-file=.env scripts/migrate.mjs"
+  },
+  "dependencies": {
+    "@univerjs/preset-sheets-conditional-formatting": "^0.25.0",
+    "@univerjs/preset-sheets-core": "^0.25.0",
+    "@univerjs/preset-sheets-data-validation": "^0.25.0",
+    "@univerjs/presets": "^0.25.0",
+    "argon2": "^0.44.0",
+    "dexie": "^4.4.4",
+    "dexie-react-hooks": "^4.4.0",
+    "next": "^16.2.0",
+    "pg": "^8.16.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "zod": "^4.4.3",
+    "@univerjs/sheets-filter": "^0.25.0",
+    "@univerjs/sheets-filter-ui": "^0.25.0",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "dotenv": "^17.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "^16.2.0",
+    "typescript": "^5.9.0"
+  },
+  "packageManager": "pnpm@10.28.2",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "argon2",
+      "protobufjs",
+      "sharp",
+      "unrs-resolver"
+    ]
+  }
+}
