@@ -8,6 +8,9 @@ import UniverPresetSheetsDataValidationEnUS from '@univerjs/preset-sheets-data-v
 import { createUniver, LocaleType, mergeLocales } from '@univerjs/presets'
 import type { WorkbookSnapshot } from '@/lib/domain/workbook'
 
+const isTouchDevice = () =>
+  typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0)
+
 import '@univerjs/presets/lib/styles/preset-sheets-core.css'
 import '@univerjs/presets/lib/styles/preset-sheets-data-validation.css'
 import '@univerjs/presets/lib/styles/preset-sheets-conditional-formatting.css'
@@ -93,8 +96,64 @@ export default function SpreadsheetEditor({
       }, 700)
     })
 
+    let touchScrollCleanup: (() => void) | undefined
+    if (isTouchDevice()) {
+      const setupTouchScroll = () => {
+        const canvas = host.querySelector('canvas')
+        if (!canvas) return
+
+        let startX = 0
+        let startY = 0
+        let tracking = false
+
+        const onTouchStart = (e: TouchEvent) => {
+          if (e.touches.length !== 1 || disposed) return
+          startX = e.touches[0].clientX
+          startY = e.touches[0].clientY
+          tracking = false
+        }
+
+        const onTouchMove = (e: TouchEvent) => {
+          if (e.touches.length !== 1 || disposed) return
+          const dx = e.touches[0].clientX - startX
+          const dy = e.touches[0].clientY - startY
+          if (!tracking && Math.abs(dx) < 8 && Math.abs(dy) < 8) return
+
+          tracking = true
+          e.preventDefault()
+
+          canvas.dispatchEvent(new WheelEvent('wheel', {
+            deltaX: -dx,
+            deltaY: -dy,
+            deltaMode: 0,
+            bubbles: true,
+            cancelable: true,
+          }))
+
+          startX = e.touches[0].clientX
+          startY = e.touches[0].clientY
+        }
+
+        const onTouchEnd = () => { tracking = false }
+
+        canvas.addEventListener('touchstart', onTouchStart, { passive: true })
+        canvas.addEventListener('touchmove', onTouchMove, { passive: false })
+        canvas.addEventListener('touchend', onTouchEnd, { passive: true })
+
+        touchScrollCleanup = () => {
+          canvas.removeEventListener('touchstart', onTouchStart)
+          canvas.removeEventListener('touchmove', onTouchMove)
+          canvas.removeEventListener('touchend', onTouchEnd)
+        }
+      }
+
+      setTimeout(setupTouchScroll, 100)
+    }
+
     return () => {
       disposed = true
+
+      if (touchScrollCleanup) touchScrollCleanup()
 
       if (saveTimer) clearTimeout(saveTimer)
 
