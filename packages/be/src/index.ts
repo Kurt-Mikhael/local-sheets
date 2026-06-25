@@ -1,8 +1,8 @@
 import express from 'express'
-import { authRouter } from './routes/auth'
-import { meRouter } from './routes/me'
-import { syncRouter } from './routes/sync'
-import { globalRateLimiter } from './lib/rate-limit'
+import { authRouter } from './routes/auth.js'
+import { meRouter } from './routes/me.js'
+import { syncRouter } from './routes/sync.js'
+import { globalRateLimiter } from './lib/rate-limit.js'
 
 export const app = express()
 const PORT = Number(process.env.PORT ?? 4000)
