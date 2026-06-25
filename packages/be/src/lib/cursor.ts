@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
-import { HttpError } from './security'
+import { HttpError } from './security.js'
 
 export interface SyncCursor {
   updatedAt: string
