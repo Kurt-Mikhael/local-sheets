@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import * as cookie from 'cookie'
-import { accountRepository } from '../repositories/account-repository'
+import { accountRepository } from '../repositories/account-repository.js'
 
 const SESSION_COOKIE = process.env.NODE_ENV === 'production'
   ? '__Host-localsheet_session'
