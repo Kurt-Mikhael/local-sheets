@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { query } from '../lib/postgres'
+import { query } from '../lib/postgres.js'
 
 interface UserRow {
   id: string
