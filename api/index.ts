@@ -1,3 +1,3 @@
-import { app } from '../packages/be/src/index'
+import { app } from '../packages/be/src/index.js'
 
 export default app
