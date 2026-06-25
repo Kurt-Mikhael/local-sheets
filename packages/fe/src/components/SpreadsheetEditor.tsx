@@ -97,10 +97,11 @@ export default function SpreadsheetEditor({
     })
 
     let touchScrollCleanup: (() => void) | undefined
+    let tbOverflowCleanup: (() => void) | undefined
     if (isTouchDevice()) {
       const setupTouchScroll = () => {
-        const canvas = host.querySelector('canvas')
-        if (!canvas) return
+        const target = host.querySelector('canvas') ?? host.firstElementChild
+        if (!target) return
 
         let startX = 0
         let startY = 0
@@ -122,9 +123,9 @@ export default function SpreadsheetEditor({
           tracking = true
           e.preventDefault()
 
-          canvas.dispatchEvent(new WheelEvent('wheel', {
-            deltaX: -dx,
-            deltaY: -dy,
+          target.dispatchEvent(new WheelEvent('wheel', {
+            deltaX: dx,
+            deltaY: dy,
             deltaMode: 0,
             bubbles: true,
             cancelable: true,
@@ -136,24 +137,75 @@ export default function SpreadsheetEditor({
 
         const onTouchEnd = () => { tracking = false }
 
-        canvas.addEventListener('touchstart', onTouchStart, { passive: true })
-        canvas.addEventListener('touchmove', onTouchMove, { passive: false })
-        canvas.addEventListener('touchend', onTouchEnd, { passive: true })
+        const el = target as EventTarget
+        el.addEventListener('touchstart', onTouchStart as EventListener, { passive: true })
+        el.addEventListener('touchmove', onTouchMove as EventListener, { passive: false })
+        el.addEventListener('touchend', onTouchEnd as EventListener, { passive: true })
 
         touchScrollCleanup = () => {
-          canvas.removeEventListener('touchstart', onTouchStart)
-          canvas.removeEventListener('touchmove', onTouchMove)
-          canvas.removeEventListener('touchend', onTouchEnd)
+          el.removeEventListener('touchstart', onTouchStart as EventListener)
+          el.removeEventListener('touchmove', onTouchMove as EventListener)
+          el.removeEventListener('touchend', onTouchEnd as EventListener)
         }
       }
 
       setTimeout(setupTouchScroll, 100)
+
+      const setupToolbarOverflow = () => {
+        const headerbar = host.querySelector<HTMLElement>('[data-u-comp="headerbar"]')
+        if (!headerbar) return
+
+        const existing = headerbar.querySelector('.tb-overflow-btn')
+        if (existing) return
+
+        const btn = document.createElement('button')
+        btn.className = 'tb-overflow-btn'
+        btn.setAttribute('aria-label', 'More tools')
+        btn.innerHTML = '···'
+
+        const panel = document.createElement('div')
+        panel.className = 'tb-overflow-panel'
+
+        const toggle = () => {
+          const isOpen = headerbar.classList.toggle('tb-expanded')
+          btn.classList.toggle('tb-overflow-active', isOpen)
+        }
+
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation()
+          toggle()
+        })
+
+        const close = () => {
+          headerbar.classList.remove('tb-expanded')
+          btn.classList.remove('tb-overflow-active')
+        }
+
+        document.addEventListener('click', (e) => {
+          if (headerbar.classList.contains('tb-expanded') &&
+              !headerbar.contains(e.target as Node)) {
+            close()
+          }
+        })
+
+        tbOverflowCleanup = () => {
+          btn.remove()
+          panel.remove()
+          document.removeEventListener('click', close)
+        }
+
+        headerbar.appendChild(btn)
+        headerbar.appendChild(panel)
+      }
+
+      setTimeout(setupToolbarOverflow, 300)
     }
 
     return () => {
       disposed = true
 
       if (touchScrollCleanup) touchScrollCleanup()
+      if (tbOverflowCleanup) tbOverflowCleanup()
 
       if (saveTimer) clearTimeout(saveTimer)
 
