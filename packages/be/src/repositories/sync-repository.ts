@@ -1,5 +1,5 @@
-import { query } from '../lib/postgres'
-import type { SyncCursor } from '../lib/cursor'
+import { query } from '../lib/postgres.js'
+import type { SyncCursor } from '../lib/cursor.js'
 
 interface SyncChangeInput {
   operationId: string
