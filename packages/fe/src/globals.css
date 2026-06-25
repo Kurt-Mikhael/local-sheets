@@ -182,11 +182,13 @@ button:disabled { cursor: not-allowed; opacity: .6; }
   .account-label { display: none; }
   .conflict-banner { align-items: stretch; flex-direction: column; }
 
-  .spreadsheet-host [data-u-comp="headerbar"] {
+  .spreadsheet-host [data-u-comp="headerbar"],
+  .spreadsheet-host [data-u-comp="ribbon-toolbar"] {
     overflow: hidden !important;
     position: relative;
   }
-  .spreadsheet-host [data-u-comp="headerbar"].tb-expanded {
+  .spreadsheet-host [data-u-comp="headerbar"].tb-expanded,
+  .spreadsheet-host [data-u-comp="ribbon-toolbar"].tb-expanded {
     overflow: visible !important;
     position: absolute;
     top: 0;
@@ -226,6 +228,14 @@ button:disabled { cursor: not-allowed; opacity: .6; }
   .tb-overflow-btn.tb-overflow-active {
     background: var(--panel);
     color: var(--accent);
+  }
+
+  .spreadsheet-host [data-u-comp="formula-bar"] {
+    overflow: visible !important;
+  }
+  .spreadsheet-host [data-u-comp="formula-bar"] .tb-overflow-btn,
+  .spreadsheet-host [data-u-comp="formula-bar"] [data-u-comp="ribbon-toolbar-more"] {
+    display: none !important;
   }
 }
 @media (max-width: 640px) {

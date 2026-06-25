@@ -29,7 +29,7 @@ syncRouter.post('/', async (req, res) => {
     const { acked, conflicts } = await syncRepository.processChanges(user.id, parsed.data.changes)
     const decodedCursor = decodeCursor(parsed.data.cursor, user.id)
     const remotePage = await syncRepository.listRemote(user.id, decodedCursor, MAX_REMOTE_PER_RESPONSE)
-    const last = remotePage.rows.at(-1)
+    const last = remotePage.rows[remotePage.rows.length - 1]
     const cursor = last
       ? encodeCursor({ updatedAt: last.updatedAt, id: last.id }, user.id)
       : parsed.data.cursor

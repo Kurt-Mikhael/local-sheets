@@ -122,6 +122,7 @@ export default function SpreadsheetEditor({
 
           tracking = true
           e.preventDefault()
+          e.stopImmediatePropagation()
 
           target.dispatchEvent(new WheelEvent('wheel', {
             deltaX: dx,
@@ -135,28 +136,34 @@ export default function SpreadsheetEditor({
           startY = e.touches[0].clientY
         }
 
-        const onTouchEnd = () => { tracking = false }
+        const onTouchEnd = (e: TouchEvent) => {
+          if (tracking) {
+            e.stopImmediatePropagation()
+          }
+          tracking = false
+        }
 
         const el = target as EventTarget
-        el.addEventListener('touchstart', onTouchStart as EventListener, { passive: true })
-        el.addEventListener('touchmove', onTouchMove as EventListener, { passive: false })
-        el.addEventListener('touchend', onTouchEnd as EventListener, { passive: true })
+        el.addEventListener('touchstart', onTouchStart as EventListener, { capture: true, passive: true })
+        el.addEventListener('touchmove', onTouchMove as EventListener, { capture: true, passive: false })
+        el.addEventListener('touchend', onTouchEnd as EventListener, { capture: true, passive: true })
 
         touchScrollCleanup = () => {
-          el.removeEventListener('touchstart', onTouchStart as EventListener)
-          el.removeEventListener('touchmove', onTouchMove as EventListener)
-          el.removeEventListener('touchend', onTouchEnd as EventListener)
+          el.removeEventListener('touchstart', onTouchStart as EventListener, { capture: true })
+          el.removeEventListener('touchmove', onTouchMove as EventListener, { capture: true })
+          el.removeEventListener('touchend', onTouchEnd as EventListener, { capture: true })
         }
       }
 
       setTimeout(setupTouchScroll, 100)
 
-      const setupToolbarOverflow = () => {
-        const headerbar = host.querySelector<HTMLElement>('[data-u-comp="headerbar"]')
-        if (!headerbar) return
+      let tbObserver: MutationObserver | undefined
 
-        const existing = headerbar.querySelector('.tb-overflow-btn')
-        if (existing) return
+      const setupToolbarOverflow = () => {
+        const toolbar = host.querySelector<HTMLElement>('[data-u-comp="ribbon-toolbar"]')
+          ?? host.querySelector<HTMLElement>('[data-u-comp="headerbar"]')
+        if (!toolbar) return
+        if (toolbar.querySelector('.tb-overflow-btn')) return
 
         const btn = document.createElement('button')
         btn.className = 'tb-overflow-btn'
@@ -167,7 +174,7 @@ export default function SpreadsheetEditor({
         panel.className = 'tb-overflow-panel'
 
         const toggle = () => {
-          const isOpen = headerbar.classList.toggle('tb-expanded')
+          const isOpen = toolbar.classList.toggle('tb-expanded')
           btn.classList.toggle('tb-overflow-active', isOpen)
         }
 
@@ -177,28 +184,32 @@ export default function SpreadsheetEditor({
         })
 
         const close = () => {
-          headerbar.classList.remove('tb-expanded')
+          toolbar.classList.remove('tb-expanded')
           btn.classList.remove('tb-overflow-active')
         }
 
         document.addEventListener('click', (e) => {
-          if (headerbar.classList.contains('tb-expanded') &&
-              !headerbar.contains(e.target as Node)) {
+          if (toolbar.classList.contains('tb-expanded') &&
+              !toolbar.contains(e.target as Node)) {
             close()
           }
         })
 
         tbOverflowCleanup = () => {
+          if (tbObserver) tbObserver.disconnect()
           btn.remove()
           panel.remove()
           document.removeEventListener('click', close)
         }
 
-        headerbar.appendChild(btn)
-        headerbar.appendChild(panel)
+        toolbar.appendChild(btn)
+        toolbar.appendChild(panel)
       }
 
-      setTimeout(setupToolbarOverflow, 300)
+      setupToolbarOverflow()
+
+      tbObserver = new MutationObserver(() => { setupToolbarOverflow() })
+      tbObserver.observe(host, { childList: true, subtree: true })
     }
 
     return () => {

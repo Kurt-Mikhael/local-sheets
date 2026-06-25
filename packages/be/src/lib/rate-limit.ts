@@ -1,3 +1,5 @@
+import type { IncomingMessage, ServerResponse } from 'node:http'
+
 interface Bucket {
   count: number
   resetAt: number
@@ -53,11 +55,16 @@ export class InMemoryRateLimiter {
 export const authRateLimiter = new InMemoryRateLimiter(10, 10 * 60_000)
 export const syncRateLimiter = new InMemoryRateLimiter(60, 60_000)
 
-export function globalRateLimiter(req: import('express').Request, res: import('express').Response, next: () => void): void {
-  const key = `global:${req.ip ?? 'unknown'}`
+export function globalRateLimiter(req: IncomingMessage, res: ServerResponse, next: () => void): void {
+  const forwarded = req.headers['x-forwarded-for']
+  const ip = typeof forwarded === 'string' ? forwarded.split(',')[0]?.trim() : req.socket.remoteAddress ?? 'unknown'
+  const key = `global:${ip}`
   const result = globalLimiter.consume(key)
   if (!result.allowed) {
-    res.status(429).set('Retry-After', String(result.retryAfterSeconds)).json({ error: 'Terlalu banyak request.' })
+    res.statusCode = 429
+    res.setHeader('Retry-After', String(result.retryAfterSeconds))
+    res.setHeader('Content-Type', 'application/json')
+    res.end(JSON.stringify({ error: 'Terlalu banyak request.' }))
     return
   }
   next()
