@@ -1,11 +1,11 @@
 import { Router } from 'express'
 import argon2 from 'argon2'
-import { authRateLimiter } from '../lib/rate-limit'
-import { accountRepository } from '../repositories/account-repository'
-import { assertMutationRequest, HttpError, safeErrorResponse } from '../lib/security'
-import { attachSessionCookie, createSession } from '../lib/session'
-import { clearSession } from '../lib/session'
-import { authSchema } from '../../../shared/src/schemas'
+import { authRateLimiter } from '../lib/rate-limit.js'
+import { accountRepository } from '../repositories/account-repository.js'
+import { assertMutationRequest, HttpError, safeErrorResponse } from '../lib/security.js'
+import { attachSessionCookie, createSession } from '../lib/session.js'
+import { clearSession } from '../lib/session.js'
+import { authSchema } from '../../../shared/src/schemas.js'
 
 export const authRouter = Router()
 
