@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { getCurrentUser } from '../lib/session'
+import { getCurrentUser } from '../lib/session.js'
 
 export const meRouter = Router()
 
