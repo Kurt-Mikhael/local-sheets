@@ -157,7 +157,7 @@ export default function SpreadsheetEditor({
 
       setTimeout(setupTouchScroll, 100)
 
-      let tbObserver: MutationObserver | undefined
+      const tbObserverRef: { current: MutationObserver | undefined } = { current: undefined }
 
       const setupToolbarOverflow = () => {
         const toolbar = host.querySelector<HTMLElement>('[data-u-comp="ribbon-toolbar"]')
@@ -168,7 +168,7 @@ export default function SpreadsheetEditor({
         const btn = document.createElement('button')
         btn.className = 'tb-overflow-btn'
         btn.setAttribute('aria-label', 'More tools')
-        btn.innerHTML = '···'
+        btn.textContent = '···'
 
         const panel = document.createElement('div')
         panel.className = 'tb-overflow-panel'
@@ -196,7 +196,7 @@ export default function SpreadsheetEditor({
         })
 
         tbOverflowCleanup = () => {
-          if (tbObserver) tbObserver.disconnect()
+          if (tbObserverRef.current) tbObserverRef.current.disconnect()
           btn.remove()
           panel.remove()
           document.removeEventListener('click', close)
@@ -208,8 +208,8 @@ export default function SpreadsheetEditor({
 
       setupToolbarOverflow()
 
-      tbObserver = new MutationObserver(() => { setupToolbarOverflow() })
-      tbObserver.observe(host, { childList: true, subtree: true })
+      tbObserverRef.current = new MutationObserver(() => { setupToolbarOverflow() })
+      tbObserverRef.current.observe(host, { childList: true, subtree: true })
     }
 
     return () => {
