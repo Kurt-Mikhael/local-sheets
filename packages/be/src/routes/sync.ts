@@ -26,7 +26,18 @@ syncRouter.post('/', async (req, res) => {
     const parsed = syncRequestSchema.safeParse(req.body)
     if (!parsed.success) throw new HttpError(400, 'Payload sinkronisasi tidak valid.')
 
-    const { acked, conflicts } = await syncRepository.processChanges(user.id, parsed.data.changes)
+    const { acked, conflicts } = await syncRepository.processChanges(
+      user.id,
+      parsed.data.changes as Array<{
+        operationId: string
+        workbookId: string
+        baseVersion: number
+        title: string
+        snapshot: Record<string, unknown>
+        deleted: boolean
+        clientUpdatedAt: string
+      }>,
+    )
     const decodedCursor = decodeCursor(parsed.data.cursor, user.id)
     const remotePage = await syncRepository.listRemote(user.id, decodedCursor, MAX_REMOTE_PER_RESPONSE)
     const last = remotePage.rows[remotePage.rows.length - 1]
