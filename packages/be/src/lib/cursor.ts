@@ -8,11 +8,10 @@ export interface SyncCursor {
 
 function signingSecret(): string {
   const secret = process.env.CURSOR_SIGNING_SECRET
-  if (secret) return secret
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('CURSOR_SIGNING_SECRET wajib dikonfigurasi di production.')
+  if (!secret || secret.length < 32) {
+    throw new Error('CURSOR_SIGNING_SECRET wajib dikonfigurasi (>=32 chars).')
   }
-  return 'development-only-change-this-cursor-secret'
+  return secret
 }
 
 function signature(payload: string, userId: string): Buffer {
