@@ -1,0 +1,21 @@
+-- =====================================================
+-- Seed data / stub untuk LocalSheet
+-- =====================================================
+-- PERINGATAN: File ini TIDAK berisi user siap pakai dengan
+-- password yang dapat di-login. Jalankan `pnpm seed:demo`
+-- untuk generate user demo dengan password acak yang
+-- di-hash dengan Argon2id. Hash dan password di-generate
+-- pada runtime, BUKAN di-commit ke repository.
+-- =====================================================
+--
+-- Cara pakai:
+--   1. psql "$DATABASE_URL" -f db/supabase/001_schema.sql
+--   2. pnpm seed:demo
+-- =====================================================
+
+-- Hapus data lama (urutannya penting karena foreign key).
+-- Hanya jalan jika Anda memahami konsekuensinya.
+-- TRUNCATE TABLE sync_operations CASCADE;
+-- TRUNCATE TABLE workbooks CASCADE;
+-- TRUNCATE TABLE sessions CASCADE;
+-- TRUNCATE TABLE users CASCADE;
