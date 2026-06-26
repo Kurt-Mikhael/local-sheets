@@ -73,4 +73,30 @@ describe('syncRequestSchema', () => {
     })
     expect(result.success).toBe(false)
   })
+
+  it('menolak title dengan karakter kontrol', () => {
+    const result = syncRequestSchema.safeParse({
+      clientId: '550e8400-e29b-41d4-a716-446655440000',
+      changes: [{ ...validChange, title: 'Halo\x00BOM' }],
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it('menolak snapshot dengan key prototype-pollution', () => {
+    const malicious = JSON.parse('{"__proto__":{"polluted":true},"constructor":{"prototype":{"polluted":true}}}')
+    const result = syncRequestSchema.safeParse({
+      clientId: '550e8400-e29b-41d4-a716-446655440000',
+      changes: [{ ...validChange, snapshot: malicious }],
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it('menolak snapshot > 1MB', () => {
+    const big = 'x'.repeat(1_100_000)
+    const result = syncRequestSchema.safeParse({
+      clientId: '550e8400-e29b-41d4-a716-446655440000',
+      changes: [{ ...validChange, snapshot: { big } }],
+    })
+    expect(result.success).toBe(false)
+  })
 })
