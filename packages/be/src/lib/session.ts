@@ -3,7 +3,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import * as cookie from 'cookie'
 import { accountRepository } from '../repositories/account-repository.js'
 
-const SESSION_COOKIE = process.env.NODE_ENV === 'production'
+function isProduction(): boolean {
+  return process.env.NODE_ENV === 'production' || process.env.VERCEL === '1'
+}
+
+const SESSION_COOKIE = isProduction()
   ? '__Host-localsheet_session'
   : 'localsheet_session'
 
@@ -29,7 +33,7 @@ export function attachSessionCookie(
 ): void {
   const setCookie = cookie.serialize(SESSION_COOKIE, session.token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: isProduction(),
     sameSite: 'strict',
     path: '/',
     expires: session.expiresAt,
@@ -44,7 +48,7 @@ export async function clearSession(req: IncomingMessage, res: ServerResponse): P
 
   const clearCookie = cookie.serialize(SESSION_COOKIE, '', {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: isProduction(),
     sameSite: 'strict',
     path: '/',
     expires: new Date(0),
