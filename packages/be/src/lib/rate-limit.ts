@@ -53,13 +53,20 @@ export class InMemoryRateLimiter {
 }
 
 export const authRateLimiter = new InMemoryRateLimiter(10, 10 * 60_000)
+export const emailRateLimiter = new InMemoryRateLimiter(5, 15 * 60_000)
 export const syncRateLimiter = new InMemoryRateLimiter(60, 60_000)
 
-export function globalRateLimiter(req: IncomingMessage, res: ServerResponse, next: () => void): void {
+function getClientIp(req: IncomingMessage): string {
   const forwarded = req.headers['x-forwarded-for']
-  const ip = typeof forwarded === 'string' ? forwarded.split(',')[0]?.trim() : req.socket.remoteAddress ?? 'unknown'
-  const key = `global:${ip}`
-  const result = globalLimiter.consume(key)
+  if (typeof forwarded === 'string' && forwarded.length > 0) {
+    return forwarded.split(',')[0]?.trim() || 'unknown'
+  }
+  return req.socket.remoteAddress ?? 'unknown'
+}
+
+export function globalRateLimiter(req: IncomingMessage, res: ServerResponse, next: () => void): void {
+  const ip = getClientIp(req)
+  const result = globalLimiter.consume(`global:${ip}`)
   if (!result.allowed) {
     res.statusCode = 429
     res.setHeader('Retry-After', String(result.retryAfterSeconds))
