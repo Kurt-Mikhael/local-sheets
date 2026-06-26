@@ -14,14 +14,20 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "pnpm --filter fe exec tsc --noEmit && pnpm --filter be exec tsc --noEmit && vitest run",
-    "test:e2e": "start-server-and-test \"pnpm dev\" \"http://localhost:3000\" \"vitest run --config vitest.e2e.config.ts\""
+    "test:e2e": "start-server-and-test \"pnpm dev\" \"http://localhost:3000\" \"vitest run --config vitest.e2e.config.ts\"",
+    "db:migrate": "node scripts/migrate.mjs",
+    "seed:demo": "node --experimental-strip-types scripts/seed-demo.mts"
   },
   "packageManager": "pnpm@10.28.2",
   "devDependencies": {
     "@types/selenium-webdriver": "^4.35.6",
+    "argon2": "^0.44.0",
     "concurrently": "^9.1.0",
+    "eslint": "^9.0.0",
+    "pg": "^8.16.0",
     "selenium-webdriver": "^4.45.0",
     "start-server-and-test": "^3.0.11",
+    "typescript-eslint": "^8.0.0",
     "vitest": "^4.1.9"
   }
 }
