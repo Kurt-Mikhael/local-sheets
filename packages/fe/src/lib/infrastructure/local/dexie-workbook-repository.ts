@@ -8,6 +8,27 @@ import type {
 } from '@/lib/domain/workbook'
 import { localDb } from '@/lib/client/db'
 
+function makeOperationId(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID()
+  }
+  if (typeof globalThis.crypto?.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16)
+    globalThis.crypto.getRandomValues(bytes)
+    bytes[6] = (bytes[6] & 0x0f) | 0x40
+    bytes[8] = (bytes[8] & 0x3f) | 0x80
+    const hex = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
+    return [
+      hex.slice(0, 8),
+      hex.slice(8, 12),
+      hex.slice(12, 16),
+      hex.slice(16, 20),
+      hex.slice(20),
+    ].join('-')
+  }
+  throw new Error('Web Crypto API tidak tersedia. Gunakan HTTPS atau localhost.')
+}
+
 export class DexieWorkbookRepository implements IWorkbookRepository {
   async list(): Promise<LocalWorkbook[]> {
     return localDb.workbooks.orderBy('updatedAt').reverse().toArray()
@@ -41,7 +62,7 @@ export class DexieWorkbookRepository implements IWorkbookRepository {
   }
 
   async rename(id: string, title: string): Promise<void> {
-    const normalized = title.trim().slice(0, 120)
+    const normalized = title.trim().slice(0, 120).replace(/[\x00-\x1F\x7F]/g, '')
     if (!normalized) return
 
     await localDb.transaction('rw', localDb.workbooks, localDb.outbox, async () => {
@@ -155,7 +176,7 @@ export class DexieWorkbookRepository implements IWorkbookRepository {
         title: remote.title,
         snapshot: remote.snapshot,
         serverVersion: remote.version,
-        createdAt: remote.updatedAt,
+        createdAt: current?.createdAt ?? new Date().toISOString(),
         updatedAt: remote.updatedAt,
         lastSyncedAt: new Date().toISOString(),
         syncState: remote.deleted ? 'deleted' : 'synced',
@@ -180,7 +201,7 @@ export class DexieWorkbookRepository implements IWorkbookRepository {
       await localDb.workbooks.put(updated)
       await localDb.outbox.put({
         workbookId,
-        operationId: crypto.randomUUID(),
+        operationId: makeOperationId(),
         baseVersion: workbook.conflict.remoteVersion,
         title: updated.title,
         snapshot: updated.snapshot,
@@ -222,7 +243,7 @@ export class DexieWorkbookRepository implements IWorkbookRepository {
   async getClientId(): Promise<string> {
     const existing = await localDb.meta.get('client-id')
     if (existing) return existing.value
-    const id = crypto.randomUUID()
+    const id = makeOperationId()
     await localDb.meta.put({ key: 'client-id', value: id })
     return id
   }
@@ -245,8 +266,8 @@ export class DexieWorkbookRepository implements IWorkbookRepository {
     const now = new Date().toISOString()
     await localDb.outbox.put({
       workbookId: workbook.id,
-      operationId: crypto.randomUUID(),
-      baseVersion: existing?.baseVersion ?? workbook.serverVersion,
+      operationId: makeOperationId(),
+      baseVersion: workbook.serverVersion,
       title: workbook.title,
       snapshot: workbook.snapshot,
       deleted,
