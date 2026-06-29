@@ -98,6 +98,102 @@ export default function SpreadsheetEditor({
 
     let touchScrollCleanup: (() => void) | undefined
     let tbOverflowCleanup: (() => void) | undefined
+
+    const setupToolbarOverflow = () => {
+      const toolbar = host.querySelector<HTMLElement>('[data-u-comp="ribbon-toolbar"]')
+        ?? host.querySelector<HTMLElement>('[data-u-comp="headerbar"]')
+      if (!toolbar) return
+      if (toolbar.querySelector('.tb-overflow-panel')) return
+
+      const nativeMore = toolbar.querySelector<HTMLElement>('[data-u-comp="ribbon-toolbar-more"]')
+      if (!nativeMore) return
+
+      const panel = document.createElement('div')
+      panel.className = 'tb-overflow-panel'
+
+      const buildPanel = () => {
+        while (panel.firstChild) panel.removeChild(panel.firstChild)
+        const seen = new Set<HTMLElement>()
+        const toolbarChildren = Array.from(toolbar.children) as HTMLElement[]
+        toolbarChildren.forEach((child) => {
+          if (child.classList.contains('tb-overflow-panel')) return
+          if (child.getAttribute('data-u-comp') === 'ribbon-toolbar-more') return
+          if (child.offsetParent === null) return
+          if (seen.has(child)) return
+          seen.add(child)
+          const clone = child.cloneNode(true) as HTMLElement
+          clone.classList.add('tb-overflow-item')
+          panel.appendChild(clone)
+        })
+        panel.querySelectorAll<HTMLElement>('button, [role="button"], select, input').forEach((cloned) => {
+          cloned.addEventListener('click', (ev) => {
+            ev.stopPropagation()
+            const all = Array.from(toolbar.querySelectorAll<HTMLElement>('button, [role="button"], select, input'))
+            const ct = (cloned.textContent ?? '').trim()
+            const original = all.find((o) =>
+              o.tagName === cloned.tagName && (o.textContent ?? '').trim() === ct
+            )
+            if (original) {
+              original.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+            }
+          })
+        })
+      }
+
+      const toggle = (e: Event) => {
+        e.stopPropagation()
+        e.preventDefault()
+        const willOpen = !panel.classList.contains('tb-overflow-open')
+        if (willOpen) {
+          buildPanel()
+          panel.classList.add('tb-overflow-open')
+          nativeMore.classList.add('tb-overflow-active')
+        } else {
+          panel.classList.remove('tb-overflow-open')
+          nativeMore.classList.remove('tb-overflow-active')
+        }
+      }
+
+      nativeMore.addEventListener('click', toggle, { capture: true })
+
+      const docClick = (e: Event) => {
+        const target = e.target as Node
+        if (!panel.classList.contains('tb-overflow-open')) return
+        if (panel.contains(target)) return
+        if (nativeMore.contains(target)) return
+        panel.classList.remove('tb-overflow-open')
+        nativeMore.classList.remove('tb-overflow-active')
+      }
+      document.addEventListener('mousedown', docClick, true)
+
+      let rebuildScheduled = false
+      const scheduleRebuild = () => {
+        if (rebuildScheduled || disposed) return
+        rebuildScheduled = true
+        requestAnimationFrame(() => {
+          rebuildScheduled = false
+          if (disposed) return
+          if (panel.classList.contains('tb-overflow-open')) {
+            buildPanel()
+          }
+        })
+      }
+      const ro = new ResizeObserver(() => scheduleRebuild())
+      ro.observe(toolbar)
+      const mo = new MutationObserver(() => scheduleRebuild())
+      mo.observe(toolbar, { childList: true })
+
+      toolbar.appendChild(panel)
+
+      tbOverflowCleanup = () => {
+        ro.disconnect()
+        mo.disconnect()
+        nativeMore.removeEventListener('click', toggle, { capture: true } as EventListenerOptions)
+        document.removeEventListener('mousedown', docClick, true)
+        panel.remove()
+      }
+    }
+
     if (isTouchDevice()) {
       const setupTouchScroll = () => {
         const target = host.querySelector('canvas') ?? host.firstElementChild
@@ -106,115 +202,77 @@ export default function SpreadsheetEditor({
         let startX = 0
         let startY = 0
         let tracking = false
+        let moved = false
 
         const onTouchStart = (e: TouchEvent) => {
           if (e.touches.length !== 1 || disposed) return
           startX = e.touches[0].clientX
           startY = e.touches[0].clientY
-          tracking = false
+          tracking = true
+          moved = false
         }
 
         const onTouchMove = (e: TouchEvent) => {
-          if (e.touches.length !== 1 || disposed) return
+          if (e.touches.length !== 1 || !tracking || disposed) return
           const dx = e.touches[0].clientX - startX
           const dy = e.touches[0].clientY - startY
-          if (!tracking && Math.abs(dx) < 8 && Math.abs(dy) < 8) return
+          if (!moved && Math.abs(dx) < 6 && Math.abs(dy) < 6) return
 
-          tracking = true
+          moved = true
           e.preventDefault()
-          e.stopImmediatePropagation()
+          e.stopPropagation()
 
-          target.dispatchEvent(new WheelEvent('wheel', {
-            deltaX: dx,
-            deltaY: dy,
-            deltaMode: 0,
-            bubbles: true,
-            cancelable: true,
-          }))
+          const scrollEl = (target.closest('[data-u-comp="workbench-container"]')
+            ?? target.closest('[data-u-comp="sheet-container"]')
+            ?? target.parentElement
+            ?? host) as HTMLElement | null
+          if (scrollEl) {
+            scrollEl.scrollLeft -= dx
+            scrollEl.scrollTop -= dy
+          } else {
+            host.scrollLeft -= dx
+            host.scrollTop -= dy
+          }
 
           startX = e.touches[0].clientX
           startY = e.touches[0].clientY
         }
 
-        const onTouchEnd = (e: TouchEvent) => {
-          if (tracking) {
-            e.stopImmediatePropagation()
-          }
+        const onTouchEnd = (_e: TouchEvent) => {
           tracking = false
         }
 
-        const el = target as EventTarget
-        el.addEventListener('touchstart', onTouchStart as EventListener, { capture: true, passive: true })
-        el.addEventListener('touchmove', onTouchMove as EventListener, { capture: true, passive: false })
-        el.addEventListener('touchend', onTouchEnd as EventListener, { capture: true, passive: true })
+        target.addEventListener('touchstart', onTouchStart as EventListener, { capture: true, passive: true })
+        target.addEventListener('touchmove', onTouchMove as EventListener, { capture: true, passive: false })
+        target.addEventListener('touchend', onTouchEnd as EventListener, { capture: true, passive: true })
 
         touchScrollCleanup = () => {
-          el.removeEventListener('touchstart', onTouchStart as EventListener, { capture: true })
-          el.removeEventListener('touchmove', onTouchMove as EventListener, { capture: true })
-          el.removeEventListener('touchend', onTouchEnd as EventListener, { capture: true })
+          target.removeEventListener('touchstart', onTouchStart as EventListener, { capture: true })
+          target.removeEventListener('touchmove', onTouchMove as EventListener, { capture: true })
+          target.removeEventListener('touchend', onTouchEnd as EventListener, { capture: true })
         }
       }
 
       setTimeout(setupTouchScroll, 100)
-
-      const tbObserverRef: { current: MutationObserver | undefined } = { current: undefined }
-
-      const setupToolbarOverflow = () => {
-        const toolbar = host.querySelector<HTMLElement>('[data-u-comp="ribbon-toolbar"]')
-          ?? host.querySelector<HTMLElement>('[data-u-comp="headerbar"]')
-        if (!toolbar) return
-        if (toolbar.querySelector('.tb-overflow-btn')) return
-
-        const btn = document.createElement('button')
-        btn.className = 'tb-overflow-btn'
-        btn.setAttribute('aria-label', 'More tools')
-        btn.textContent = '···'
-
-        const panel = document.createElement('div')
-        panel.className = 'tb-overflow-panel'
-
-        const toggle = () => {
-          const isOpen = toolbar.classList.toggle('tb-expanded')
-          btn.classList.toggle('tb-overflow-active', isOpen)
-        }
-
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation()
-          toggle()
-        })
-
-        const close = () => {
-          toolbar.classList.remove('tb-expanded')
-          btn.classList.remove('tb-overflow-active')
-        }
-
-        document.addEventListener('click', (e) => {
-          if (toolbar.classList.contains('tb-expanded') &&
-              !toolbar.contains(e.target as Node)) {
-            close()
-          }
-        })
-
-        tbOverflowCleanup = () => {
-          if (tbObserverRef.current) tbObserverRef.current.disconnect()
-          btn.remove()
-          panel.remove()
-          document.removeEventListener('click', close)
-        }
-
-        toolbar.appendChild(btn)
-        toolbar.appendChild(panel)
-      }
-
-      setupToolbarOverflow()
-
-      tbObserverRef.current = new MutationObserver(() => { setupToolbarOverflow() })
-      tbObserverRef.current.observe(host, { childList: true, subtree: true })
     }
+
+    setupToolbarOverflow()
+    let tbObserverScheduled = false
+    const tbObserver = new MutationObserver(() => {
+      if (tbObserverScheduled || disposed) return
+      tbObserverScheduled = true
+      requestAnimationFrame(() => {
+        tbObserverScheduled = false
+        if (disposed) return
+        setupToolbarOverflow()
+      })
+    })
+    tbObserver.observe(host, { childList: true, subtree: true })
 
     return () => {
       disposed = true
 
+      tbObserver.disconnect()
       if (touchScrollCleanup) touchScrollCleanup()
       if (tbOverflowCleanup) tbOverflowCleanup()
 

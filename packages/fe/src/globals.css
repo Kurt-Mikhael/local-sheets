@@ -153,7 +153,8 @@ button:disabled { cursor: not-allowed; opacity: .6; }
 .status-error, .status-login-required { background: #fff7ed; color: #9a3412; }
 .status-done { background: #f0fdf4; color: #166534; }
 .status-offline { background: #fef2f2; color: #991b1b; }
-.spreadsheet-host { flex: 1; min-height: 0; width: 100%; overflow: hidden; position: relative; }
+.spreadsheet-host { flex: 1; min-height: 0; width: 100%; overflow: hidden; position: relative; touch-action: pan-x pan-y pinch-zoom; overscroll-behavior: contain; }
+.spreadsheet-host > div { overflow: auto; touch-action: pan-x pan-y pinch-zoom; }
 .editor-loading, .empty-state { flex: 1; display: grid; place-items: center; color: var(--muted); }
 
 .auth-page { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
@@ -176,67 +177,114 @@ button:disabled { cursor: not-allowed; opacity: .6; }
 .form-error { background: #fef2f2; color: #991b1b; border-radius: 8px; padding: 10px; font-size: 13px; }
 .auth-switch { margin-bottom: 0; font-size: 14px; }
 
+.spreadsheet-host [data-u-comp="ribbon-toolbar"] {
+  overflow-x: auto !important;
+  overflow-y: visible !important;
+  position: relative;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.spreadsheet-host [data-u-comp="ribbon-toolbar"]::-webkit-scrollbar { display: none; }
+.spreadsheet-host [data-u-comp="ribbon-toolbar-more"] {
+  display: inline-flex !important;
+  flex-shrink: 0;
+  cursor: pointer;
+  background: var(--panel);
+  z-index: 5;
+}
+.spreadsheet-host [data-u-comp="ribbon-toolbar-more"].tb-overflow-active {
+  background: var(--accent-soft) !important;
+  color: var(--accent) !important;
+}
+
+.tb-overflow-panel {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-top: 0;
+  box-shadow: 0 8px 24px rgba(0,0,0,.12);
+  padding: 12px;
+  display: none;
+  z-index: 50;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  align-content: flex-start;
+  max-height: 60vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+.tb-overflow-panel.tb-overflow-open { display: grid; }
+.tb-overflow-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: white;
+  min-width: 0;
+  overflow: hidden;
+}
+.tb-overflow-item > * {
+  min-width: 22px;
+  min-height: 22px;
+  font-size: 12px;
+  pointer-events: auto;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.tb-overflow-item select,
+.tb-overflow-item input { font-size: 12px; }
+
+.tb-overflow-panel {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.18);
+  padding: 10px;
+  display: none;
+  z-index: 50;
+  width: max-content;
+  max-width: min(560px, calc(100vw - 16px));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  align-content: flex-start;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.tb-overflow-panel.tb-overflow-open { display: grid; }
+.tb-overflow-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: white;
+}
+.tb-overflow-item > * {
+  min-width: 22px;
+  min-height: 22px;
+  font-size: 12px;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.tb-overflow-item select,
+.tb-overflow-item input { font-size: 12px; }
+
 @media (max-width: 780px) {
   .workspace { grid-template-columns: 1fr; }
   .sidebar { display: none; }
   .account-label { display: none; }
   .conflict-banner { align-items: stretch; flex-direction: column; }
-
-  .spreadsheet-host [data-u-comp="headerbar"],
-  .spreadsheet-host [data-u-comp="ribbon-toolbar"] {
-    overflow: hidden !important;
-    position: relative;
-  }
-  .spreadsheet-host [data-u-comp="headerbar"].tb-expanded,
-  .spreadsheet-host [data-u-comp="ribbon-toolbar"].tb-expanded {
-    overflow: visible !important;
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 100;
-    background: var(--panel);
-    box-shadow: 0 8px 24px rgba(0,0,0,.12);
-  }
-  .spreadsheet-host [data-u-comp="ribbon-toolbar-more"] {
-    flex-shrink: 0;
-  }
-
-  .spreadsheet-host canvas {
-    touch-action: none;
-  }
-
-  .tb-overflow-btn {
-    position: absolute;
-    right: 0;
-    top: 0;
-    bottom: 0;
-    width: 40px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: 0;
-    background: linear-gradient(90deg, transparent 0, var(--panel) 40%);
-    cursor: pointer;
-    z-index: 15;
-    font-size: 18px;
-    font-weight: 700;
-    letter-spacing: 3px;
-    color: var(--muted);
-    padding: 0 8px 0 16px;
-  }
-  .tb-overflow-btn.tb-overflow-active {
-    background: var(--panel);
-    color: var(--accent);
-  }
-
-  .spreadsheet-host [data-u-comp="formula-bar"] {
-    overflow: visible !important;
-  }
-  .spreadsheet-host [data-u-comp="formula-bar"] .tb-overflow-btn,
-  .spreadsheet-host [data-u-comp="formula-bar"] [data-u-comp="ribbon-toolbar-more"] {
-    display: none !important;
-  }
+  .spreadsheet-host canvas { touch-action: none; }
 }
 @media (max-width: 640px) {
   .topbar { padding: 0 8px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
