@@ -8,18 +8,22 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "react-router-dom": "^7.6.0",
-    "dexie": "^4.4.4",
-    "dexie-react-hooks": "^4.4.0",
     "@univerjs/preset-sheets-conditional-formatting": "^0.25.0",
     "@univerjs/preset-sheets-core": "^0.25.0",
     "@univerjs/preset-sheets-data-validation": "^0.25.0",
     "@univerjs/presets": "^0.25.0",
     "@univerjs/sheets-filter": "^0.25.0",
     "@univerjs/sheets-filter-ui": "^0.25.0",
-    "rxjs": "^7.8.2"
+    "dexie": "^4.4.4",
+    "dexie-react-hooks": "^4.4.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.6.0",
+    "rxjs": "^7.8.2",
+    "y-indexeddb": "^9.0.12",
+    "y-protocols": "^1.0.7",
+    "y-websocket": "2.0.4",
+    "yjs": "^13.6.31"
   },
   "devDependencies": {
     "@types/react": "^19.2.0",

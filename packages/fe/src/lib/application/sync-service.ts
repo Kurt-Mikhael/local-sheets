@@ -17,7 +17,15 @@ export class SyncService {
     private readonly transport: ISyncTransport,
   ) {}
 
-  run(accountId: string): Promise<SyncRunResult> {
+  run(accountId: string, accountRole: 'user' | 'admin' = 'user'): Promise<SyncRunResult> {
+    if (accountRole === 'user') {
+      return Promise.resolve({
+        acked: 0,
+        conflicts: 0,
+        remoteApplied: [],
+        remoteConflicts: [],
+      })
+    }
     if (this.running) {
       if (this.runningAccountId !== accountId) {
         return Promise.reject(new Error('LOCAL_ACCOUNT_MISMATCH'))

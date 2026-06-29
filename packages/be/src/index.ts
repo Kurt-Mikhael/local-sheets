@@ -1,7 +1,12 @@
+import './env.js'
 import express from 'express'
+import { createServer } from 'node:http'
 import { authRouter } from './routes/auth.js'
 import { meRouter } from './routes/me.js'
 import { syncRouter } from './routes/sync.js'
+import { adminRouter } from './routes/admin.js'
+import { sharedRouter } from './routes/shared.js'
+import { handleCollabUpgrade } from './routes/collab.js'
 import { globalRateLimiter } from './lib/rate-limit.js'
 
 export const app = express()
@@ -34,13 +39,26 @@ app.use((req, res, next) => {
 app.use('/api/auth', authRouter)
 app.use('/api/me', meRouter)
 app.use('/api/sync', syncRouter)
+app.use('/api/admin', adminRouter)
+app.use('/api/shared', sharedRouter)
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true })
 })
 
 if (!process.env.VERCEL) {
-  app.listen(PORT, () => {
+  const server = createServer(app)
+
+  server.on('upgrade', (req, socket, head) => {
+    const url = req.url ?? ''
+    if (url.startsWith('/api/collab')) {
+      handleCollabUpgrade(req, socket, head)
+      return
+    }
+    socket.destroy()
+  })
+
+  server.listen(PORT, () => {
     console.log(`[be] Server running on http://localhost:${PORT}`)
   })
 }

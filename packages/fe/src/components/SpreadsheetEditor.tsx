@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import * as Y from 'yjs'
 import { UniverSheetsConditionalFormattingPreset } from '@univerjs/preset-sheets-conditional-formatting'
 import UniverPresetSheetsConditionalFormattingEnUS from '@univerjs/preset-sheets-conditional-formatting/locales/en-US'
 import { UniverSheetsCorePreset } from '@univerjs/preset-sheets-core'
@@ -7,6 +8,8 @@ import { UniverSheetsDataValidationPreset } from '@univerjs/preset-sheets-data-v
 import UniverPresetSheetsDataValidationEnUS from '@univerjs/preset-sheets-data-validation/locales/en-US'
 import { createUniver, LocaleType, mergeLocales } from '@univerjs/presets'
 import type { WorkbookSnapshot } from '@/lib/domain/workbook'
+import { joinWorkbook, leaveWorkbook, type JoinResult } from '@/lib/collab/yjs-doc'
+import { syncCellsToYjs, applyYjsCellsToSnapshot, parseKey, type Account, type CellMap } from '@/lib/collab/univer-yjs-bridge'
 
 const isTouchDevice = () =>
   typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0)
@@ -18,12 +21,14 @@ import '@univerjs/presets/lib/styles/preset-sheets-conditional-formatting.css'
 interface SpreadsheetEditorProps {
   workbookId: string
   seedSnapshot: WorkbookSnapshot
+  account: Account | null
   onPersistSnapshot: (workbookId: string, snapshot: WorkbookSnapshot) => void
 }
 
 export default function SpreadsheetEditor({
   workbookId,
   seedSnapshot,
+  account,
   onPersistSnapshot,
 }: SpreadsheetEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null)
@@ -38,6 +43,8 @@ export default function SpreadsheetEditor({
     let saveTimer: ReturnType<typeof setTimeout> | undefined
     let disposeTimer: ReturnType<typeof setTimeout> | undefined
     let disposed = false
+    let collabCells: JoinResult['cells'] | null = null
+    let collabHandle: JoinResult | null = null
 
     const mountNode = document.createElement('div')
     mountNode.style.width = '100%'
@@ -65,22 +72,74 @@ export default function SpreadsheetEditor({
 
     let unitId: string | null = null
 
-    try {
-      const workbook = univerAPI.createWorkbook(seedSnapshot as never)
-      unitId = workbook.getId()
-    } catch (error) {
-      console.error('createWorkbook failed:', error)
+    let initSnapshot: WorkbookSnapshot = seedSnapshot
 
-      disposeTimer = setTimeout(() => {
+    void (async () => {
+      if (!account) return
+      try {
+        const handle = await joinWorkbook(workbookId, {
+          id: account.id,
+          email: account.email,
+          color: '',
+        })
+        collabHandle = handle
+        collabCells = handle.cells
+
+        initSnapshot = applyYjsCellsToSnapshot(seedSnapshot, handle.cells)
+
         try {
-          univer.dispose()
-        } catch {}
-      }, 0)
+          const workbook = univerAPI.createWorkbook(initSnapshot as never)
+          unitId = workbook.getId()
+        } catch (error) {
+          console.error('createWorkbook failed:', error)
+          return
+        }
 
-      return () => {
-        if (disposeTimer) clearTimeout(disposeTimer)
+        const yjsObserver = (events: Array<Y.YEvent<Y.AbstractType<unknown>>>, _tx: Y.Transaction) => {
+          if (disposed) return
+          if (_tx.origin === 'local') return
+          const wb = univerAPI.getActiveWorkbook()
+          if (!wb) return
+          const allSheets = wb.getSheets?.() ?? []
+          const sheetById = new Map<string, { getRange: (r: number, c: number, h: number, w: number) => { setValue: (v: unknown) => void } }>()
+          for (const s of allSheets) {
+            sheetById.set(s.getSheetId(), s as never)
+          }
+          for (const ev of events) {
+            let key: string | null = null
+            if (ev.path.length > 0 && typeof ev.path[0] === 'string') {
+              key = ev.path[0] as string
+            }
+            if (!key) continue
+            const parsed = parseKey(key)
+            if (!parsed) continue
+            const cellMap = handle.cells.get(key)
+            const data = cellMap ? (cellMap.toJSON() as CellMap) : null
+            const currentSheet = sheetById.get(parsed.sheetId)
+            if (!currentSheet) continue
+            const range = currentSheet.getRange(parsed.row, parsed.col, 1, 1)
+            if (data && (data.v !== undefined || data.f !== undefined)) {
+              const value = data.f
+                ? { f: data.f, v: data.v }
+                : { v: data.v }
+              range.setValue(value as never)
+            } else {
+              range.setValue({} as never)
+            }
+          }
+        }
+        handle.cells.observeDeep(yjsObserver)
+        ;(handle as unknown as { _yjsObserver: typeof yjsObserver })._yjsObserver = yjsObserver
+      } catch (error) {
+        console.warn('[collab] failed to join, falling back to local-only:', error)
+        try {
+          const workbook = univerAPI.createWorkbook(seedSnapshot as never)
+          unitId = workbook.getId()
+        } catch (err) {
+          console.error('createWorkbook failed:', err)
+        }
       }
-    }
+    })()
 
     const disposable = univerAPI.onCommandExecuted(() => {
       if (saveTimer) clearTimeout(saveTimer)
@@ -92,6 +151,13 @@ export default function SpreadsheetEditor({
         if (!activeWorkbook) return
 
         const snapshot = activeWorkbook.save() as unknown as WorkbookSnapshot
+
+        if (collabCells) {
+          const activeSheet = activeWorkbook.getActiveSheet()
+          const sheetId = activeSheet?.getSheetId() ?? ''
+          if (sheetId) syncCellsToYjs(snapshot, collabCells, sheetId)
+        }
+
         onPersistSnapshotRef.current(workbookId, snapshot)
       }, 700)
     })
@@ -288,6 +354,16 @@ export default function SpreadsheetEditor({
         }
       } catch {}
 
+      if (collabHandle) {
+        try {
+          const observer = (collabHandle as unknown as { _yjsObserver?: () => void })._yjsObserver
+          if (observer) collabHandle!.cells.unobserveDeep(observer)
+        } catch {}
+        try {
+          leaveWorkbook(workbookId)
+        } catch {}
+      }
+
       disposeTimer = setTimeout(() => {
         try {
           univer.dispose()
@@ -298,7 +374,7 @@ export default function SpreadsheetEditor({
         }
       }, 0)
     }
-  }, [])
+  }, [workbookId, account?.id])
 
   return <div ref={hostRef} className="spreadsheet-host" aria-label="Editor spreadsheet" />
 }

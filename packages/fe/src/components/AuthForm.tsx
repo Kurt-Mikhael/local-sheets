@@ -1,4 +1,4 @@
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { useState, type FormEvent } from 'react'
 
 interface AuthFormProps {
@@ -6,7 +6,6 @@ interface AuthFormProps {
 }
 
 const AuthForm = ({ mode }: AuthFormProps) => {
-  const navigate = useNavigate()
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
@@ -36,8 +35,7 @@ const AuthForm = ({ mode }: AuthFormProps) => {
         setError(result.error ?? 'Autentikasi gagal.')
         return
       }
-      navigate('/', { replace: true })
-      window.location.reload()
+      window.location.assign('/')
     } catch {
       setError('Server tidak dapat dijangkau. Autentikasi membutuhkan koneksi internet.')
     } finally {
@@ -55,7 +53,7 @@ const AuthForm = ({ mode }: AuthFormProps) => {
         <p>
           {login
             ? 'Masuk untuk menyinkronkan workbook lokal ke database global akun Anda.'
-            : 'Password minimal 10 karakter. Data spreadsheet tetap disimpan lokal terlebih dahulu.'}
+            : 'Password minimal 8 karakter. Data spreadsheet tetap disimpan lokal terlebih dahulu.'}
         </p>
         <form onSubmit={submit} className="auth-form">
           <label>
@@ -69,7 +67,7 @@ const AuthForm = ({ mode }: AuthFormProps) => {
               type="password"
               autoComplete={login ? 'current-password' : 'new-password'}
               required
-              minLength={10}
+              minLength={8}
               maxLength={128}
             />
           </label>

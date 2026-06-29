@@ -52,9 +52,12 @@ export class InMemoryRateLimiter {
   }
 }
 
-export const authRateLimiter = new InMemoryRateLimiter(10, 10 * 60_000)
-export const emailRateLimiter = new InMemoryRateLimiter(5, 15 * 60_000)
-export const syncRateLimiter = new InMemoryRateLimiter(60, 60_000)
+const isDev = process.env.NODE_ENV !== 'production' && process.env.VERCEL !== '1'
+
+export const authRateLimiter = new InMemoryRateLimiter(isDev ? 1000 : 10, 10 * 60_000)
+export const emailRateLimiter = new InMemoryRateLimiter(isDev ? 1000 : 5, 15 * 60_000)
+export const syncRateLimiter = new InMemoryRateLimiter(isDev ? 10_000 : 60, 60_000)
+export const workbookAdminRateLimiter = new InMemoryRateLimiter(isDev ? 1000 : 30, 60_000)
 
 function getClientIp(req: IncomingMessage): string {
   const forwarded = req.headers['x-forwarded-for']
@@ -77,4 +80,4 @@ export function globalRateLimiter(req: IncomingMessage, res: ServerResponse, nex
   next()
 }
 
-const globalLimiter = new InMemoryRateLimiter(100, 60_000)
+const globalLimiter = new InMemoryRateLimiter(1000, 60_000)

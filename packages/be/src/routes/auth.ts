@@ -47,7 +47,7 @@ authRouter.post('/login', async (req, res) => {
 
     const session = await createSession(user.id)
     attachSessionCookie(res, session)
-    res.status(200).json({ user: { id: user.id, email: user.email } })
+    res.status(200).json({ user: { id: user.id, email: user.email, role: user.role } })
   } catch (error) {
     if (res.headersSent) return
     const safe = safeErrorResponse(error)
@@ -91,10 +91,10 @@ authRouter.post('/register', async (req, res) => {
       parallelism: 1,
     })
 
-    const user = await accountRepository.createUser(parsed.data.email, passwordHash)
+    const user = await accountRepository.createUser(parsed.data.email, passwordHash, 'user')
     const session = await createSession(user.id)
     attachSessionCookie(res, session)
-    res.status(201).json({ user })
+    res.status(201).json({ user: { id: user.id, email: user.email, role: user.role } })
   } catch (error) {
     if (res.headersSent) return
     const safe = safeErrorResponse(error)

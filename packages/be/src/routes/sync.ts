@@ -24,7 +24,10 @@ syncRouter.post('/', async (req, res) => {
     }
 
     const parsed = syncRequestSchema.safeParse(req.body)
-    if (!parsed.success) throw new HttpError(400, 'Payload sinkronisasi tidak valid.')
+    if (!parsed.success) {
+      console.error('[sync] zod error:', JSON.stringify(parsed.error.issues, null, 2))
+      throw new HttpError(400, 'Payload sinkronisasi tidak valid.')
+    }
 
     const { acked, conflicts } = await syncRepository.processChanges(
       user.id,
@@ -37,6 +40,7 @@ syncRouter.post('/', async (req, res) => {
         deleted: boolean
         clientUpdatedAt: string
       }>,
+      user.role,
     )
     const decodedCursor = decodeCursor(parsed.data.cursor, user.id)
     const remotePage = await syncRepository.listRemote(user.id, decodedCursor, MAX_REMOTE_PER_RESPONSE)

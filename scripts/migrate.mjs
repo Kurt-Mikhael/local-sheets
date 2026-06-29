@@ -1,7 +1,26 @@
 import fs from 'node:fs/promises'
+import fsSync from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import pg from 'pg'
+
+function loadEnv() {
+  const envPath = path.join(process.cwd(), '.env')
+  try {
+    const text = fsSync.readFileSync(envPath, 'utf8')
+    for (const line of text.split(/\r?\n/)) {
+      const trimmed = line.trim()
+      if (!trimmed || trimmed.startsWith('#')) continue
+      const eq = trimmed.indexOf('=')
+      if (eq === -1) continue
+      const key = trimmed.slice(0, eq).trim()
+      const value = trimmed.slice(eq + 1).trim().replace(/^["']|["']$/g, '')
+      if (process.env[key] === undefined) process.env[key] = value
+    }
+  } catch {}
+}
+
+loadEnv()
 
 const connectionString = process.env.DATABASE_URL
 if (!connectionString) {

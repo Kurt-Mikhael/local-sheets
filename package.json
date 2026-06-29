@@ -6,9 +6,10 @@
     "node": ">=20.9.0"
   },
   "scripts": {
-    "dev": "concurrently -n fe,be \"pnpm:dev:fe\" \"pnpm:dev:be\"",
+    "dev": "concurrently -k -n fe,be \"pnpm:dev:fe\" \"pnpm:dev:be\"",
     "dev:fe": "pnpm --filter fe dev",
     "dev:be": "pnpm --filter be dev",
+    "clean:ports": "powershell -NoProfile -Command \"foreach ($p in 3000,3001,4000) { Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue } }; Get-Process node -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq '' -and $_.StartTime -gt (Get-Date).AddMinutes(-30) } | Stop-Process -Force -ErrorAction SilentlyContinue\"",
     "build": "pnpm --filter fe build",
     "lint": "eslint .",
     "test": "vitest run",
@@ -16,18 +17,26 @@
     "check": "pnpm --filter fe exec tsc --noEmit && pnpm --filter be exec tsc --noEmit && vitest run",
     "test:e2e": "start-server-and-test \"pnpm dev\" \"http://localhost:3000\" \"vitest run --config vitest.e2e.config.ts\"",
     "db:migrate": "node scripts/migrate.mjs",
+    "seed:admin": "node --experimental-strip-types scripts/seed-admin.mts",
     "seed:demo": "node --experimental-strip-types scripts/seed-demo.mts"
   },
   "packageManager": "pnpm@10.28.2",
   "devDependencies": {
     "@types/selenium-webdriver": "^4.35.6",
+    "@types/ws": "^8.18.1",
     "argon2": "^0.44.0",
+    "chromedriver": "^149.0.4",
     "concurrently": "^9.1.0",
     "eslint": "^9.0.0",
+    "lib0": "^0.2.117",
     "pg": "^8.16.0",
     "selenium-webdriver": "^4.45.0",
     "start-server-and-test": "^3.0.11",
     "typescript-eslint": "^8.0.0",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.9",
+    "ws": "^8.21.0",
+    "y-protocols": "^1.0.7",
+    "y-websocket": "2.0.4",
+    "yjs": "^13.6.31"
   }
 }

@@ -9,5 +9,5 @@ meRouter.get('/', async (req, res) => {
     res.status(401).json({ user: null })
     return
   }
-  res.json({ user })
+  res.json({ user: { id: user.id, email: user.email, role: user.role } })
 })

@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg'
 import { query, withTransaction } from '../lib/postgres.js'
+import { HttpError } from '../lib/security.js'
 import type { SyncCursor } from '../lib/cursor.js'
 
 interface SyncChangeInput {
@@ -47,6 +48,7 @@ export class PostgresSyncRepository {
   async processChanges(
     userId: string,
     changes: SyncChangeInput[],
+    userRole: 'user' | 'admin' = 'user',
   ): Promise<{ acked: SyncAck[]; conflicts: SyncConflict[] }> {
     return withTransaction(async (client) => {
       await client.query('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE')
@@ -86,6 +88,10 @@ export class PostgresSyncRepository {
         )
 
         const current = existing.rows[0]
+
+        if (!current && userRole !== 'admin') {
+          throw new HttpError(403, 'Hanya admin yang dapat membuat workbook baru.')
+        }
 
         if (current && change.baseVersion < current.version) {
           conflicts.push({

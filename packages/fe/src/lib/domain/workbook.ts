@@ -110,7 +110,10 @@ function makeId(): string {
 }
 
 export function createEmptyWorkbook(title = 'Workbook Baru'): LocalWorkbook {
-  const id = makeId()
+  return createEmptyWorkbookWithId(makeId(), title)
+}
+
+export function createEmptyWorkbookWithId(id: string, title = 'Workbook Baru'): LocalWorkbook {
   const sheetId = makeId()
   const now = new Date().toISOString()
 
