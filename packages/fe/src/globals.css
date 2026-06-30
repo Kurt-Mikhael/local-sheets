@@ -186,8 +186,13 @@ button:disabled { cursor: not-allowed; opacity: .6; }
   position: relative;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  user-select: none;
+  cursor: grab;
 }
 .spreadsheet-host [data-u-comp="ribbon-toolbar"]::-webkit-scrollbar { display: none; }
+.spreadsheet-host [data-u-comp="ribbon-toolbar"].tb-dragging { cursor: grabbing; }
+.spreadsheet-host [data-u-comp="ribbon-toolbar"] * { user-select: none; -webkit-user-drag: none; }
 .spreadsheet-host [data-u-comp="ribbon-toolbar-more"] {
   display: inline-flex !important;
   flex-shrink: 0;
@@ -199,49 +204,6 @@ button:disabled { cursor: not-allowed; opacity: .6; }
   background: var(--accent-soft) !important;
   color: var(--accent) !important;
 }
-
-.tb-overflow-panel {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-top: 0;
-  box-shadow: 0 8px 24px rgba(0,0,0,.12);
-  padding: 12px;
-  display: none;
-  z-index: 50;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  align-content: flex-start;
-  max-height: 60vh;
-  overflow-y: auto;
-  overflow-x: hidden;
-  -webkit-overflow-scrolling: touch;
-}
-.tb-overflow-panel.tb-overflow-open { display: grid; }
-.tb-overflow-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 6px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: white;
-  min-width: 0;
-  overflow: hidden;
-}
-.tb-overflow-item > * {
-  min-width: 22px;
-  min-height: 22px;
-  font-size: 12px;
-  pointer-events: auto;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.tb-overflow-item select,
-.tb-overflow-item input { font-size: 12px; }
 
 .tb-overflow-panel {
   position: absolute;

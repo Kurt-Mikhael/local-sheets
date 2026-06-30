@@ -222,6 +222,56 @@ export default function SpreadsheetEditor({
 
       nativeMore.addEventListener('click', toggle, { capture: true })
 
+      let dragStartX = 0
+      let dragStartScroll = 0
+      let dragging = false
+      let dragMoved = false
+      const DRAG_THRESHOLD = 4
+
+      const onPointerDown = (e: PointerEvent) => {
+        if (e.button !== 0) return
+        if (toolbar.scrollWidth <= toolbar.clientWidth) return
+        const target = e.target as HTMLElement
+        if (target.closest('button, select, input, [role="button"], [contenteditable]')) return
+        dragStartX = e.clientX
+        dragStartScroll = toolbar.scrollLeft
+        dragging = true
+        dragMoved = false
+        toolbar.setPointerCapture(e.pointerId)
+        toolbar.classList.add('tb-dragging')
+      }
+      const onPointerMove = (e: PointerEvent) => {
+        if (!dragging) return
+        const dx = e.clientX - dragStartX
+        if (!dragMoved && Math.abs(dx) < DRAG_THRESHOLD) return
+        dragMoved = true
+        toolbar.scrollLeft = dragStartScroll - dx
+      }
+      const onPointerUp = (e: PointerEvent) => {
+        if (!dragging) return
+        dragging = false
+        toolbar.classList.remove('tb-dragging')
+        if (toolbar.hasPointerCapture(e.pointerId)) {
+          toolbar.releasePointerCapture(e.pointerId)
+        }
+      }
+      const swallowClick = (e: Event) => {
+        if (dragMoved) {
+          e.stopPropagation()
+          e.preventDefault()
+        }
+      }
+      toolbar.addEventListener('pointerdown', onPointerDown)
+      toolbar.addEventListener('pointermove', onPointerMove)
+      toolbar.addEventListener('pointerup', onPointerUp)
+      toolbar.addEventListener('pointercancel', onPointerUp)
+      toolbar.addEventListener('click', swallowClick, { capture: true })
+
+      const updateCursor = () => {
+        toolbar.classList.toggle('tb-scrollable', toolbar.scrollWidth > toolbar.clientWidth)
+      }
+      updateCursor()
+
       const docClick = (e: Event) => {
         const target = e.target as Node
         if (!panel.classList.contains('tb-overflow-open')) return
@@ -244,7 +294,7 @@ export default function SpreadsheetEditor({
           }
         })
       }
-      const ro = new ResizeObserver(() => scheduleRebuild())
+      const ro = new ResizeObserver(() => { scheduleRebuild(); updateCursor() })
       ro.observe(toolbar)
       const mo = new MutationObserver(() => scheduleRebuild())
       mo.observe(toolbar, { childList: true })
@@ -256,6 +306,11 @@ export default function SpreadsheetEditor({
         mo.disconnect()
         nativeMore.removeEventListener('click', toggle, { capture: true } as EventListenerOptions)
         document.removeEventListener('mousedown', docClick, true)
+        toolbar.removeEventListener('pointerdown', onPointerDown)
+        toolbar.removeEventListener('pointermove', onPointerMove)
+        toolbar.removeEventListener('pointerup', onPointerUp)
+        toolbar.removeEventListener('pointercancel', onPointerUp)
+        toolbar.removeEventListener('click', swallowClick, { capture: true } as EventListenerOptions)
         panel.remove()
       }
     }
@@ -321,6 +376,71 @@ export default function SpreadsheetEditor({
 
       setTimeout(setupTouchScroll, 100)
     }
+
+    const setupPointerPan = () => {
+      const workbench = host.querySelector<HTMLElement>('[data-u-comp="workbench-container"]')
+        ?? host.querySelector<HTMLElement>('[data-u-comp="sheet-container"]')
+        ?? host
+      if (!workbench) return
+
+      let startX = 0
+      let startY = 0
+      let startScrollLeft = 0
+      let startScrollTop = 0
+      let panning = false
+      let moved = false
+      const PAN_THRESHOLD = 4
+
+      const onPointerDown = (e: PointerEvent) => {
+        if (e.button !== 0 || disposed) return
+        if (e.pointerType === 'touch') return
+        const target = e.target as HTMLElement
+        if (target.closest('[data-u-comp="ribbon-toolbar"], [data-u-comp="headerbar"]')) return
+        if (target.closest('input, textarea, select, button, [contenteditable="true"]')) return
+        if (target.closest('[data-u-comp="sheet-bar"], [data-u-comp="sheet-tab"], [data-u-comp="sheet-tabs"]')) return
+        startX = e.clientX
+        startY = e.clientY
+        startScrollLeft = workbench.scrollLeft
+        startScrollTop = workbench.scrollTop
+        panning = true
+        moved = false
+      }
+      const onPointerMove = (e: PointerEvent) => {
+        if (!panning) return
+        const dx = e.clientX - startX
+        const dy = e.clientY - startY
+        if (!moved && Math.abs(dx) < PAN_THRESHOLD && Math.abs(dy) < PAN_THRESHOLD) return
+        moved = true
+        e.preventDefault()
+        e.stopPropagation()
+        workbench.scrollLeft = startScrollLeft - dx
+        workbench.scrollTop = startScrollTop - dy
+      }
+      const onPointerUp = () => {
+        panning = false
+      }
+      const swallowIfPanned = (e: Event) => {
+        if (!moved) return
+        e.stopPropagation()
+        e.preventDefault()
+        moved = false
+      }
+
+      workbench.addEventListener('pointerdown', onPointerDown)
+      workbench.addEventListener('pointermove', onPointerMove)
+      workbench.addEventListener('pointerup', onPointerUp)
+      workbench.addEventListener('pointercancel', onPointerUp)
+      workbench.addEventListener('click', swallowIfPanned, { capture: true })
+
+      touchScrollCleanup = () => {
+        workbench.removeEventListener('pointerdown', onPointerDown)
+        workbench.removeEventListener('pointermove', onPointerMove)
+        workbench.removeEventListener('pointerup', onPointerUp)
+        workbench.removeEventListener('pointercancel', onPointerUp)
+        workbench.removeEventListener('click', swallowIfPanned, { capture: true } as EventListenerOptions)
+      }
+    }
+    setTimeout(setupPointerPan, 100)
 
     setupToolbarOverflow()
     let tbObserverScheduled = false
