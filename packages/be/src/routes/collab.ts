@@ -21,11 +21,30 @@ function hashToken(token: string): string {
 
 async function getUserFromCookie(req: IncomingMessage): Promise<{ id: string; email: string } | null> {
   const cookies = cookie.parse(req.headers.cookie ?? '')
-  const token = cookies[SESSION_COOKIE]
-  if (!token) return null
-  const session = await accountRepository.findUserBySessionHash(hashToken(token))
-  if (!session || session.expiresAt <= new Date()) return null
-  return session.user
+  let token = cookies[SESSION_COOKIE]
+  if (!token) {
+    try {
+      const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
+      token = url.searchParams.get('token') ?? undefined
+    } catch {
+      // ignore
+    }
+  }
+  if (!token) {
+    console.log('[ws] no session cookie, cookies present:', Object.keys(cookies))
+    return null
+  }
+  try {
+    const session = await accountRepository.findUserBySessionHash(hashToken(token))
+    if (!session || session.expiresAt <= new Date()) {
+      console.log('[ws] session lookup miss for token prefix', token.slice(0, 8))
+      return null
+    }
+    return session.user
+  } catch (err) {
+    console.error('[ws] session lookup error', err)
+    return null
+  }
 }
 
 const MESSAGE_SYNC = 0
@@ -121,8 +140,10 @@ async function loadRoomFromDb(roomName: string, room: Room): Promise<void> {
   if (!userId || !workbookId) return
   const row = await accountRepository.findSnapshot(userId, workbookId)
   if (!row) return
+  const buf = new Uint8Array(row.doc)
+  if (buf.byteLength < 2) return
   try {
-    Y.applyUpdate(room.doc, new Uint8Array(row.doc))
+    Y.applyUpdate(room.doc, buf)
   } catch (error) {
     console.error('[ws] failed to apply snapshot for', roomName, error)
   }
@@ -206,12 +227,15 @@ function rejectUpgrade(socket: Duplex, status: number, body: string): void {
 }
 
 export function handleCollabUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+  console.log('[ws] upgrade request url=', req.url, 'cookie?', !!req.headers.cookie)
   void (async () => {
     const user = await getUserFromCookie(req)
     if (!user) {
+      console.log('[ws] rejecting upgrade: no user')
       rejectUpgrade(socket, 401, 'Login diperlukan untuk kolaborasi.')
       return
     }
+    console.log('[ws] user resolved, id=', user.id)
 
     const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
     const workbookId = url.pathname.split('/').filter(Boolean).pop() ?? ''
@@ -222,6 +246,7 @@ export function handleCollabUpgrade(req: IncomingMessage, socket: Duplex, head: 
 
     const ownerRow = await accountRepository.findWorkbookOwner(workbookId)
     if (!ownerRow) {
+      console.log('[ws] workbook not found, id=', workbookId)
       rejectUpgrade(socket, 404, 'Workbook tidak ditemukan.')
       return
     }
