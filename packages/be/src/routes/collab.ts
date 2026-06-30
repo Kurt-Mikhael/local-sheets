@@ -1,6 +1,6 @@
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
-import { WebSocketServer, type WebSocket } from 'ws'
+import { WebSocketServer, WebSocket } from 'ws'
 import * as Y from 'yjs'
 import * as syncProtocol from 'y-protocols/sync'
 import * as awarenessProtocol from 'y-protocols/awareness'
@@ -21,34 +21,46 @@ function hashToken(token: string): string {
 
 async function getUserFromCookie(req: IncomingMessage): Promise<{ id: string; email: string } | null> {
   const cookies = cookie.parse(req.headers.cookie ?? '')
-  let token = cookies[SESSION_COOKIE]
+  const token = cookies[SESSION_COOKIE]
   if (!token) {
-    try {
-      const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
-      token = url.searchParams.get('token') ?? undefined
-    } catch {
-      // ignore
-    }
-  }
-  if (!token) {
-    console.log('[ws] no session cookie, cookies present:', Object.keys(cookies))
     return null
   }
   try {
     const session = await accountRepository.findUserBySessionHash(hashToken(token))
     if (!session || session.expiresAt <= new Date()) {
-      console.log('[ws] session lookup miss for token prefix', token.slice(0, 8))
       return null
     }
     return session.user
-  } catch (err) {
-    console.error('[ws] session lookup error', err)
+  } catch {
     return null
   }
 }
 
 const MESSAGE_SYNC = 0
 const MESSAGE_AWARENESS = 1
+
+const MAX_MESSAGE_BYTES = 256 * 1024
+const MAX_MESSAGES_PER_WINDOW = 60
+const WINDOW_MS = 10_000
+
+interface ConnState {
+  count: number
+  resetAt: number
+}
+const connStates = new WeakMap<WebSocket, ConnState>()
+
+function allowMessage(ws: WebSocket): boolean {
+  const now = Date.now()
+  let state = connStates.get(ws)
+  if (!state || state.resetAt <= now) {
+    state = { count: 1, resetAt: now + WINDOW_MS }
+    connStates.set(ws, state)
+    return true
+  }
+  if (state.count >= MAX_MESSAGES_PER_WINDOW) return false
+  state.count += 1
+  return true
+}
 
 interface Room {
   doc: Y.Doc
@@ -116,6 +128,14 @@ function sendSyncStep1(ws: WebSocket, room: Room): void {
 }
 
 function handleMessage(ws: WebSocket, room: Room, data: Uint8Array): void {
+  if (data.byteLength > MAX_MESSAGE_BYTES) {
+    ws.close(1009, 'Message too large')
+    return
+  }
+  if (!allowMessage(ws)) {
+    ws.close(1011, 'Rate limit exceeded')
+    return
+  }
   const decoder = decoding.createDecoder(data)
   const encoder = encoding.createEncoder()
   const messageType = decoding.readVarUint(decoder)
@@ -132,6 +152,8 @@ function handleMessage(ws: WebSocket, room: Room, data: Uint8Array): void {
       awarenessProtocol.applyAwarenessUpdate(room.awareness, decoding.readVarUint8Array(decoder), ws)
       break
     }
+    default:
+      ws.close(1003, 'Unknown message type')
   }
 }
 
@@ -145,7 +167,7 @@ async function loadRoomFromDb(roomName: string, room: Room): Promise<void> {
   try {
     Y.applyUpdate(room.doc, buf)
   } catch (error) {
-    console.error('[ws] failed to apply snapshot for', roomName, error)
+    console.error('[ws] failed to apply snapshot for room', error)
   }
 }
 
@@ -155,13 +177,13 @@ async function saveRoomToDb(roomName: string, room: Room): Promise<void> {
   const state = Y.encodeStateAsUpdate(room.doc)
   const stateBuffer = Buffer.from(state)
   if (stateBuffer.length > 5 * 1024 * 1024) {
-    console.warn(`[ws] snapshot too large for ${roomName}, skipping save`)
+    console.warn('[ws] snapshot too large, skipping save')
     return
   }
   try {
     await accountRepository.upsertSnapshot(userId, workbookId, stateBuffer)
   } catch (error) {
-    console.error('[ws] failed to save snapshot for', roomName, error)
+    console.error('[ws] failed to save snapshot', error)
   }
 }
 
@@ -170,12 +192,12 @@ setInterval(() => {
   for (const [roomName, room] of rooms) {
     if (room.conns.size === 0) continue
     void saveRoomToDb(roomName, room).catch((err) => {
-      console.error('[ws] periodic save failed for', roomName, err)
+      console.error('[ws] periodic save failed', err)
     })
   }
 }, SAVE_INTERVAL_MS)
 
-const wss = new WebSocketServer({ noServer: true })
+const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES })
 
 wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
   const roomName = (req.url ?? '/').slice(1).split('?')[0]
@@ -195,8 +217,8 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
   ws.on('message', (data: Buffer) => {
     try {
       handleMessage(ws, room, new Uint8Array(data))
-    } catch (err) {
-      console.error('[ws] message error', err)
+    } catch {
+      ws.close(1011, 'Message handler error')
     }
   })
 
@@ -217,7 +239,7 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
 function rejectUpgrade(socket: Duplex, status: number, body: string): void {
   const payload = JSON.stringify({ error: body })
   socket.write(
-    `HTTP/1.1 ${status} ${status === 401 ? 'Unauthorized' : 'Bad Request'}\r\n` +
+    `HTTP/1.1 ${status} ${status === 401 ? 'Unauthorized' : status === 403 ? 'Forbidden' : status === 404 ? 'Not Found' : 'Bad Request'}\r\n` +
       'Content-Type: application/json\r\n' +
       `Content-Length: ${Buffer.byteLength(payload)}\r\n` +
       'Connection: close\r\n\r\n' +
@@ -227,15 +249,12 @@ function rejectUpgrade(socket: Duplex, status: number, body: string): void {
 }
 
 export function handleCollabUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
-  console.log('[ws] upgrade request url=', req.url, 'cookie?', !!req.headers.cookie)
   void (async () => {
     const user = await getUserFromCookie(req)
     if (!user) {
-      console.log('[ws] rejecting upgrade: no user')
       rejectUpgrade(socket, 401, 'Login diperlukan untuk kolaborasi.')
       return
     }
-    console.log('[ws] user resolved, id=', user.id)
 
     const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
     const workbookId = url.pathname.split('/').filter(Boolean).pop() ?? ''
@@ -246,7 +265,6 @@ export function handleCollabUpgrade(req: IncomingMessage, socket: Duplex, head: 
 
     const ownerRow = await accountRepository.findWorkbookOwner(workbookId)
     if (!ownerRow) {
-      console.log('[ws] workbook not found, id=', workbookId)
       rejectUpgrade(socket, 404, 'Workbook tidak ditemukan.')
       return
     }

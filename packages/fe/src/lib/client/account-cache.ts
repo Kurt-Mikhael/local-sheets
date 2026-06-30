@@ -1,17 +1,17 @@
 const ACCOUNT_CACHE_KEY = 'localsheet:last-account'
 
+export type CachedRole = 'user' | 'admin'
+
 interface CachedAccount {
   id: string
   email: string
-  role: 'user' | 'admin'
+  role: CachedRole
   cachedAt: string
 }
 
-export function readCachedAccount(): CachedAccount | null {
-  if (typeof localStorage === 'undefined') return null
+function parse(raw: string | null): CachedAccount | null {
+  if (!raw) return null
   try {
-    const raw = localStorage.getItem(ACCOUNT_CACHE_KEY)
-    if (!raw) return null
     const parsed = JSON.parse(raw) as CachedAccount
     if (!parsed.id || !parsed.email || (parsed.role !== 'user' && parsed.role !== 'admin')) {
       return null
@@ -22,7 +22,16 @@ export function readCachedAccount(): CachedAccount | null {
   }
 }
 
-export function writeCachedAccount(account: { id: string; email: string; role: 'user' | 'admin' }): void {
+export function readCachedAccount(): CachedAccount | null {
+  if (typeof localStorage === 'undefined') return null
+  return parse(localStorage.getItem(ACCOUNT_CACHE_KEY))
+}
+
+export function readCachedAccountId(): string | null {
+  return readCachedAccount()?.id ?? null
+}
+
+export function writeCachedAccount(account: { id: string; email: string; role: CachedRole }): void {
   if (typeof localStorage === 'undefined') return
   try {
     const payload: CachedAccount = { ...account, cachedAt: new Date().toISOString() }
