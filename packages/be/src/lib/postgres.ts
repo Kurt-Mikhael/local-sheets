@@ -7,31 +7,20 @@ const { Pool } = pg
 
 let pool: pg.Pool | undefined
 
-function withSslMode(url: string): string {
-  // ponytail: serverless cold start + cross-region Neon
-  // needs longer than 10s for TCP handshake when the function region
-  // differs from the DB region. keepAlive stops Vercel NAT from
-  // silently dropping idle pooled connections between requests.
-  if (/[?&]sslmode=/.test(url)) return url
-  return url + (url.includes('?') ? '&' : '?') + 'sslmode=require'
-}
-
 function getPool(): pg.Pool {
   if (pool) return pool
 
   const dbSsl = process.env.DB_SSL === 'true'
   const rejectUnauthorized = process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false'
-  const finalUrl = dbSsl ? withSslMode(connectionString) : connectionString
 
   pool = new Pool({
-    connectionString: finalUrl,
+    connectionString,
     max: Number(process.env.DB_POOL_MAX ?? 10),
     idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 30_000,
-    keepAlive: true,
+    connectionTimeoutMillis: 10_000,
     statement_timeout: Number(process.env.DB_STATEMENT_TIMEOUT_MS ?? 30_000),
     query_timeout: Number(process.env.DB_QUERY_TIMEOUT_MS ?? 30_000),
-    ssl: dbSsl ? { rejectUnauthorized } : false,
+    ssl: dbSsl ? { rejectUnauthorized } : undefined,
   })
 
   pool.on('error', (err) => {
