@@ -3,9 +3,45 @@ dist
 .next
 .env
 .env.local
+.env.*.local
 generated
 *.log
 .DS_Store
 coverage
 
 .vercel
+
+# Vite cache
+.vite
+packages/fe/dev-dist
+packages/fe/dist-ssr
+packages/fe/dist
+
+# Build artifacts
+*.tsbuildinfo
+.turbo
+.cache
+
+# OS
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea
+*.swp
+*.swo
+*~
+
+# Test artifacts
+.nyc_output
+playwright-report
+test-results
+
+# pnpm
+.pnpm-store
+
+# Local debug helpers
+debug-dom.mjs
