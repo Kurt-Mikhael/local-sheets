@@ -32,24 +32,25 @@ export function assertSameOrigin(req: IncomingMessage): void {
   const origin = req.headers['origin']
   const referer = req.headers['referer']
 
-  if (!origin) {
-    if (referer) {
-      try {
-        const refOrigin = new URL(referer).origin
-        if (!allowedOrigins().has(refOrigin)) {
-          throw new HttpError(403, 'Referer request ditolak.')
-        }
-      } catch {
-        throw new HttpError(403, 'Referer request tidak valid.')
-      }
-    } else {
-      throw new HttpError(403, 'Origin atau Referer wajib ada.')
+  if (origin) {
+    if (!allowedOrigins().has(origin)) {
+      throw new HttpError(403, 'Origin request ditolak.')
     }
     return
   }
 
-  if (!allowedOrigins().has(origin)) {
-    throw new HttpError(403, 'Origin request ditolak.')
+  if (!referer) {
+    throw new HttpError(403, 'Origin wajib ada untuk request mutasi.')
+  }
+
+  try {
+    const refOrigin = new URL(referer).origin
+    if (!allowedOrigins().has(refOrigin)) {
+      throw new HttpError(403, 'Referer request ditolak.')
+    }
+  } catch (err) {
+    if (err instanceof HttpError) throw err
+    throw new HttpError(403, 'Referer request tidak valid.')
   }
 }
 
