@@ -1,47 +1,25 @@
-import type { IWorkbookRepository } from '@/lib/application/ports'
 import type {
   LocalWorkbook,
   OutboxRecord,
   RemoteWorkbook,
   SyncConflict,
   WorkbookSnapshot,
-} from '@/lib/domain/workbook'
-import { localDb } from '@/lib/client/db'
+} from 'shared/src/workbook'
+import { localDb } from '../../client/db'
 
-function makeOperationId(): string {
-  if (typeof globalThis.crypto?.randomUUID === 'function') {
-    return globalThis.crypto.randomUUID()
-  }
-  if (typeof globalThis.crypto?.getRandomValues === 'function') {
-    const bytes = new Uint8Array(16)
-    globalThis.crypto.getRandomValues(bytes)
-    bytes[6] = (bytes[6] & 0x0f) | 0x40
-    bytes[8] = (bytes[8] & 0x3f) | 0x80
-    const hex = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
-    return [
-      hex.slice(0, 8),
-      hex.slice(8, 12),
-      hex.slice(12, 16),
-      hex.slice(16, 20),
-      hex.slice(20),
-    ].join('-')
-  }
-  throw new Error('Web Crypto API tidak tersedia. Gunakan HTTPS atau localhost.')
-}
-
-export class DexieWorkbookRepository implements IWorkbookRepository {
-  async list(): Promise<LocalWorkbook[]> {
+export class DexieWorkbookRepository {
+  list(): Promise<LocalWorkbook[]> {
     return localDb.workbooks.orderBy('updatedAt').reverse().toArray()
   }
 
-  async get(id: string): Promise<LocalWorkbook | undefined> {
+  get(id: string): Promise<LocalWorkbook | undefined> {
     return localDb.workbooks.get(id)
   }
 
   async create(workbook: LocalWorkbook): Promise<void> {
     await localDb.transaction('rw', localDb.workbooks, localDb.outbox, async () => {
       await localDb.workbooks.put({ ...workbook, syncState: 'pending' })
-      await this.queueChange(workbook, false)
+      await queueChange(workbook, false)
     })
   }
 
@@ -57,7 +35,7 @@ export class DexieWorkbookRepository implements IWorkbookRepository {
         syncState: current.conflict ? 'conflict' : 'pending',
       }
       await localDb.workbooks.put(updated)
-      await this.queueChange(updated, false)
+      await queueChange(updated, false)
     })
   }
 
@@ -77,7 +55,7 @@ export class DexieWorkbookRepository implements IWorkbookRepository {
         syncState: current.conflict ? 'conflict' : 'pending',
       }
       await localDb.workbooks.put(updated)
-      await this.queueChange(updated, false)
+      await queueChange(updated, false)
     })
   }
 
@@ -92,11 +70,11 @@ export class DexieWorkbookRepository implements IWorkbookRepository {
         syncState: 'deleted',
       }
       await localDb.workbooks.put(updated)
-      await this.queueChange(updated, true)
+      await queueChange(updated, true)
     })
   }
 
-  async getPendingChanges(limit: number): Promise<OutboxRecord[]> {
+  getPendingChanges(limit: number): Promise<OutboxRecord[]> {
     return localDb.outbox.orderBy('updatedAt').limit(limit).toArray()
   }
 
@@ -114,17 +92,17 @@ export class DexieWorkbookRepository implements IWorkbookRepository {
         await localDb.outbox.put({ ...pending, baseVersion: serverVersion })
       }
 
+      let nextState: LocalWorkbook['syncState']
+      if (workbook.syncState === 'deleted') nextState = 'deleted'
+      else if (sameOperation) nextState = 'synced'
+      else if (workbook.conflict) nextState = 'conflict'
+      else nextState = 'pending'
+
       await localDb.workbooks.put({
         ...workbook,
         serverVersion,
         lastSyncedAt: new Date().toISOString(),
-        syncState: workbook.syncState === 'deleted'
-          ? 'deleted'
-          : sameOperation
-            ? 'synced'
-            : workbook.conflict
-              ? 'conflict'
-              : 'pending',
+        syncState: nextState,
       })
     })
   }
@@ -201,7 +179,7 @@ export class DexieWorkbookRepository implements IWorkbookRepository {
       await localDb.workbooks.put(updated)
       await localDb.outbox.put({
         workbookId,
-        operationId: makeOperationId(),
+        operationId: crypto.randomUUID(),
         baseVersion: workbook.conflict.remoteVersion,
         title: updated.title,
         snapshot: updated.snapshot,
@@ -233,46 +211,56 @@ export class DexieWorkbookRepository implements IWorkbookRepository {
   }
 
   async getCursor(): Promise<string | undefined> {
-    return (await localDb.meta.get('sync-cursor'))?.value || undefined
+    return (await readMeta('sync-cursor')) ?? undefined
   }
 
-  async setCursor(cursor?: string): Promise<void> {
-    if (cursor) await localDb.meta.put({ key: 'sync-cursor', value: cursor })
+  setCursor(cursor?: string): Promise<void> {
+    if (!cursor) return Promise.resolve()
+    return writeMeta('sync-cursor', cursor)
   }
 
   async getClientId(): Promise<string> {
-    const existing = await localDb.meta.get('client-id')
-    if (existing) return existing.value
-    const id = makeOperationId()
-    await localDb.meta.put({ key: 'client-id', value: id })
+    const existing = await readMeta('client-id')
+    if (existing) return existing
+    const id = crypto.randomUUID()
+    await writeMeta('client-id', id)
     return id
   }
 
   async ensureAccountBinding(accountId: string): Promise<void> {
     await localDb.transaction('rw', localDb.meta, async () => {
-      const existing = await localDb.meta.get('bound-account-id')
+      const existing = await readMeta('bound-account-id')
       if (!existing) {
-        await localDb.meta.put({ key: 'bound-account-id', value: accountId })
+        await writeMeta('bound-account-id', accountId)
         return
       }
-      if (existing.value !== accountId) {
+      if (existing !== accountId) {
         throw new Error('LOCAL_ACCOUNT_MISMATCH')
       }
     })
   }
+}
 
-  private async queueChange(workbook: LocalWorkbook, deleted: boolean): Promise<void> {
-    const existing = await localDb.outbox.get(workbook.id)
-    const now = new Date().toISOString()
-    await localDb.outbox.put({
-      workbookId: workbook.id,
-      operationId: makeOperationId(),
-      baseVersion: workbook.serverVersion,
-      title: workbook.title,
-      snapshot: workbook.snapshot,
-      deleted,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-    })
-  }
+async function queueChange(workbook: LocalWorkbook, deleted: boolean): Promise<void> {
+  const existing = await localDb.outbox.get(workbook.id)
+  const now = new Date().toISOString()
+  await localDb.outbox.put({
+    workbookId: workbook.id,
+    operationId: crypto.randomUUID(),
+    baseVersion: workbook.serverVersion,
+    title: workbook.title,
+    snapshot: workbook.snapshot,
+    deleted,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  })
+}
+
+async function readMeta(key: string): Promise<string | undefined> {
+  const row = await localDb.meta.get(key)
+  return row?.value
+}
+
+async function writeMeta(key: string, value: string): Promise<void> {
+  await localDb.meta.put({ key, value })
 }
