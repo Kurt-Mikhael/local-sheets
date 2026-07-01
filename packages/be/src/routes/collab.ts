@@ -7,60 +7,15 @@ import * as awarenessProtocol from 'y-protocols/awareness'
 import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
 import * as map from 'lib0/map'
-import * as cookie from 'cookie'
 import { accountRepository } from '../repositories/account-repository.js'
-import { createHash } from 'node:crypto'
-
-const SESSION_COOKIE = process.env.NODE_ENV === 'production' || process.env.VERCEL === '1'
-  ? '__Host-localsheet_session'
-  : 'localsheet_session'
-
-function hashToken(token: string): string {
-  return createHash('sha256').update(token).digest('hex')
-}
-
-async function getUserFromCookie(req: IncomingMessage): Promise<{ id: string; email: string } | null> {
-  const cookies = cookie.parse(req.headers.cookie ?? '')
-  const token = cookies[SESSION_COOKIE]
-  if (!token) {
-    return null
-  }
-  try {
-    const session = await accountRepository.findUserBySessionHash(hashToken(token))
-    if (!session || session.expiresAt <= new Date()) {
-      return null
-    }
-    return session.user
-  } catch {
-    return null
-  }
-}
+import { getCurrentUser } from '../lib/session.js'
+import { InMemoryRateLimiter } from '../lib/rate-limit.js'
 
 const MESSAGE_SYNC = 0
 const MESSAGE_AWARENESS = 1
 
 const MAX_MESSAGE_BYTES = 256 * 1024
-const MAX_MESSAGES_PER_WINDOW = 60
-const WINDOW_MS = 10_000
-
-interface ConnState {
-  count: number
-  resetAt: number
-}
-const connStates = new WeakMap<WebSocket, ConnState>()
-
-function allowMessage(ws: WebSocket): boolean {
-  const now = Date.now()
-  let state = connStates.get(ws)
-  if (!state || state.resetAt <= now) {
-    state = { count: 1, resetAt: now + WINDOW_MS }
-    connStates.set(ws, state)
-    return true
-  }
-  if (state.count >= MAX_MESSAGES_PER_WINDOW) return false
-  state.count += 1
-  return true
-}
+const connLimiter = new InMemoryRateLimiter(60, 10_000)
 
 interface Room {
   doc: Y.Doc
@@ -105,8 +60,7 @@ function getRoom(roomName: string): Room {
       }
     })
 
-    const room: Room = { doc, awareness, conns: new Map() }
-    return room
+    return { doc, awareness, conns: new Map() }
   })
 }
 
@@ -132,7 +86,8 @@ function handleMessage(ws: WebSocket, room: Room, data: Uint8Array): void {
     ws.close(1009, 'Message too large')
     return
   }
-  if (!allowMessage(ws)) {
+  const connId = (ws as unknown as { __connId?: number }).__connId ?? 0
+  if (!connLimiter.consume(`ws:${connId}`).allowed) {
     ws.close(1011, 'Rate limit exceeded')
     return
   }
@@ -197,6 +152,7 @@ setInterval(() => {
   }
 }, SAVE_INTERVAL_MS)
 
+let connIdCounter = 0
 const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES })
 
 wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
@@ -208,6 +164,7 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
   const room = getRoom(roomName)
   const controlledIds = new Set<number>()
   room.conns.set(ws, controlledIds)
+  ;(ws as unknown as { __connId: number }).__connId = ++connIdCounter
 
   if (room.doc.store.clients.size === 0) {
     void loadRoomFromDb(roomName, room)
@@ -223,8 +180,7 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
   })
 
   ws.on('close', () => {
-    const awareness = room.awareness
-    awarenessProtocol.removeAwarenessStates(awareness, Array.from(controlledIds), null)
+    awarenessProtocol.removeAwarenessStates(room.awareness, Array.from(controlledIds), null)
     room.conns.delete(ws)
     if (room.conns.size === 0) {
       void saveRoomToDb(roomName, room).catch((err) => {
@@ -250,13 +206,18 @@ function rejectUpgrade(socket: Duplex, status: number, body: string): void {
 
 export function handleCollabUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
   void (async () => {
-    const user = await getUserFromCookie(req)
+    const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
+    // ponytail: WS upgrade may lose the HttpOnly cookie through dev proxies; accept token via query as a fallback
+    if (!req.headers.cookie) {
+      const token = url.searchParams.get('token')
+      if (token) req.headers.cookie = `localsheet_session=${token}`
+    }
+    const user = await getCurrentUser(req)
     if (!user) {
       rejectUpgrade(socket, 401, 'Login diperlukan untuk kolaborasi.')
       return
     }
 
-    const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
     const workbookId = url.pathname.split('/').filter(Boolean).pop() ?? ''
     if (!workbookId) {
       rejectUpgrade(socket, 400, 'Workbook id kosong.')
