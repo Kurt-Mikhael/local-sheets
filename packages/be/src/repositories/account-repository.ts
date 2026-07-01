@@ -100,6 +100,27 @@ export class PostgresAccountRepository {
     return row ? { doc: row.doc } : null
   }
 
+  async findWorkbookData(
+    userId: string,
+    workbookId: string,
+  ): Promise<{ title: string; snapshot: Record<string, unknown>; version: number; updatedAt: string } | null> {
+    const result = await query<{ title: string; snapshot: Record<string, unknown> | null; version: number; updated_at: Date }>(
+      `SELECT title, snapshot, version, updated_at
+       FROM workbooks
+       WHERE user_id = $1 AND id = $2 AND deleted_at IS NULL
+       LIMIT 1`,
+      [userId, workbookId],
+    )
+    const row = result.rows[0]
+    if (!row) return null
+    return {
+      title: row.title,
+      snapshot: row.snapshot ?? { id: workbookId, name: row.title, sheetOrder: [], styles: {}, resources: [], sheets: {} },
+      version: row.version,
+      updatedAt: row.updated_at.toISOString(),
+    }
+  }
+
   async findWorkbookOwner(workbookId: string): Promise<{ ownerId: string } | null> {
     const result = await query<{ user_id: string }>(
       'SELECT user_id FROM workbook_snapshots WHERE workbook_id = $1 LIMIT 1',
@@ -111,20 +132,44 @@ export class PostgresAccountRepository {
 
   async upsertSnapshot(userId: string, workbookId: string, doc: Buffer): Promise<void> {
     await query(
-      `INSERT INTO workbook_snapshots (user_id, workbook_id, doc, version, updated_at)
-       VALUES ($1, $2, $3, 1, NOW())
+      `INSERT INTO workbook_snapshots (user_id, workbook_id, doc, version, title, updated_at)
+       VALUES ($1, $2, $3, 1, 'Workbook Baru', NOW())
        ON CONFLICT (user_id, workbook_id)
        DO UPDATE SET doc = EXCLUDED.doc, version = workbook_snapshots.version + 1, updated_at = NOW()`,
       [userId, workbookId, doc],
     )
   }
 
-  async createEmptySnapshot(userId: string, workbookId: string): Promise<void> {
+  async renameSnapshot(userId: string, workbookId: string, title: string): Promise<void> {
     await query(
-      `INSERT INTO workbook_snapshots (user_id, workbook_id, doc, version, updated_at)
-       VALUES ($1, $2, '', 1, NOW())
-       ON CONFLICT (user_id, workbook_id) DO NOTHING`,
+      `UPDATE workbook_snapshots SET title = $3, updated_at = NOW()
+       WHERE user_id = $1 AND workbook_id = $2`,
+      [userId, workbookId, title],
+    )
+  }
+
+  async findSnapshotTitle(userId: string, workbookId: string): Promise<string | null> {
+    const result = await query<{ title: string }>(
+      'SELECT title FROM workbook_snapshots WHERE user_id = $1 AND workbook_id = $2 LIMIT 1',
       [userId, workbookId],
+    )
+    return result.rows[0]?.title ?? null
+  }
+
+  async createEmptySnapshot(userId: string, workbookId: string, title: string): Promise<void> {
+    // ponytail: also seed workbooks so a freshly-created workbook is visible to shared users
+    const emptySnapshot = { id: workbookId, name: title, sheetOrder: [], styles: {}, resources: [], sheets: {} }
+    await query(
+      `INSERT INTO workbook_snapshots (user_id, workbook_id, doc, version, title, updated_at)
+       VALUES ($1, $2, '', 1, $3, NOW())
+       ON CONFLICT (user_id, workbook_id) DO NOTHING`,
+      [userId, workbookId, title],
+    )
+    await query(
+      `INSERT INTO workbooks (user_id, id, title, snapshot, version, updated_at)
+       VALUES ($1, $2, $3, $4::jsonb, 0, NOW())
+       ON CONFLICT (user_id, id) DO UPDATE SET title = EXCLUDED.title`,
+      [userId, workbookId, title, JSON.stringify(emptySnapshot)],
     )
   }
 
@@ -158,21 +203,25 @@ export class PostgresAccountRepository {
   // ponytail: admin sees only workbooks they own. schema has no separate
   // "owner_id" — whoever inserts the first snapshot row for a workbook_id is the owner.
   // when admin creates a workbook, createEmptySnapshot inserts under admin's user_id,
-  // so the row is theirs and shows up here.
-  async listWorkbooksByOwner(ownerId: string): Promise<Array<{ id: string; ownerEmail: string; ownerRole: string }>> {
-    const result = await query<{ workbook_id: string; email: string; role: string }>(
+  // so the row is theirs and shows up here. left-join `workbooks` for live title;
+  // fallback to a placeholder when only the snapshot row exists.
+  async listWorkbooksByOwner(ownerId: string): Promise<Array<{ id: string; title: string; ownerEmail: string; ownerRole: string }>> {
+    const result = await query<{ workbook_id: string; title: string; email: string; role: string }>(
       `SELECT DISTINCT ON (s.workbook_id)
               s.workbook_id,
+              COALESCE(NULLIF(w.title, ''), s.title) AS title,
               u.email,
               u.role
        FROM workbook_snapshots s
        INNER JOIN users u ON u.id = s.user_id
+       LEFT JOIN workbooks w ON w.user_id = s.user_id AND w.id = s.workbook_id
        WHERE s.user_id = $1
        ORDER BY s.workbook_id, s.updated_at DESC`,
       [ownerId],
     )
     return result.rows.map((r) => ({
       id: r.workbook_id,
+      title: r.title,
       ownerEmail: r.email,
       ownerRole: r.role,
     }))

@@ -8,7 +8,7 @@ interface SyncChangeInput {
   workbookId: string
   baseVersion: number
   title: string
-  snapshot: Record<string, unknown>
+  snapshot: unknown
   deleted: boolean
   clientUpdatedAt: string
 }
@@ -79,12 +79,31 @@ export class PostgresSyncRepository {
           continue
         }
 
+        let workbookOwnerId = userId
+        if (userRole === 'user') {
+          const owner = await client.query<{ user_id: string }>(
+            'SELECT user_id FROM workbook_snapshots WHERE workbook_id = $1 LIMIT 1',
+            [change.workbookId],
+          )
+          if (owner.rowCount === 0) {
+            throw new HttpError(404, 'Workbook tidak ditemukan.')
+          }
+          workbookOwnerId = owner.rows[0].user_id
+          const access = await client.query(
+            'SELECT 1 FROM workbook_access WHERE user_id = $1 AND workbook_id = $2 LIMIT 1',
+            [userId, change.workbookId],
+          )
+          if ((access.rowCount ?? 0) === 0) {
+            throw new HttpError(403, 'Anda tidak memiliki akses ke workbook ini.')
+          }
+        }
+
         const existing = await client.query<WorkbookVersionRow>(
           `SELECT version, title, snapshot, deleted_at IS NOT NULL AS deleted
            FROM workbooks
            WHERE user_id = $1 AND id = $2
            FOR UPDATE`,
-          [userId, change.workbookId],
+          [workbookOwnerId, change.workbookId],
         )
 
         const current = existing.rows[0]
@@ -107,6 +126,8 @@ export class PostgresSyncRepository {
 
         const newVersion = (current?.version ?? 0) + 1
 
+        console.log('[sync] upsert', { workbookId: change.workbookId, owner: workbookOwnerId, newVersion, snapshotKeys: Object.keys((change.snapshot as Record<string, unknown>) ?? {}) })
+
         if (change.deleted) {
           await client.query(
             `INSERT INTO workbooks (user_id, id, title, snapshot, version, deleted_at, updated_at)
@@ -115,7 +136,7 @@ export class PostgresSyncRepository {
                deleted_at = NOW(),
                version = EXCLUDED.version,
                updated_at = $6`,
-            [userId, change.workbookId, change.title, JSON.stringify(change.snapshot), newVersion, change.clientUpdatedAt],
+            [workbookOwnerId, change.workbookId, change.title, JSON.stringify(change.snapshot), newVersion, change.clientUpdatedAt],
           )
         } else {
           await client.query(
@@ -127,14 +148,20 @@ export class PostgresSyncRepository {
                version = EXCLUDED.version,
                deleted_at = NULL,
                updated_at = $6`,
-            [userId, change.workbookId, change.title, JSON.stringify(change.snapshot), newVersion, change.clientUpdatedAt],
+            [workbookOwnerId, change.workbookId, change.title, JSON.stringify(change.snapshot), newVersion, change.clientUpdatedAt],
+          )
+          await client.query(
+            `INSERT INTO workbook_snapshots (user_id, workbook_id, doc, version, title, updated_at)
+             VALUES ($1, $2, '', 1, $3, NOW())
+             ON CONFLICT (user_id, workbook_id) DO UPDATE SET title = EXCLUDED.title, updated_at = NOW()`,
+            [workbookOwnerId, change.workbookId, change.title],
           )
         }
 
         await client.query(
           `INSERT INTO sync_operations (user_id, operation_id, workbook_id, version)
            VALUES ($1, $2, $3, $4)`,
-          [userId, change.operationId, change.workbookId, newVersion],
+          [workbookOwnerId, change.operationId, change.workbookId, newVersion],
         )
 
         acked.push({
