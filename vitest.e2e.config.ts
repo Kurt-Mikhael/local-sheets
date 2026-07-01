@@ -2,6 +2,7 @@ import { defineConfig } from 'vitest/config'
 import { readFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 
+// ponytail: vitest doesn't accept --env-file; load it here once for e2e only.
 const envPath = resolve(process.cwd(), '.env')
 if (existsSync(envPath)) {
   for (const line of readFileSync(envPath, 'utf8').split(/\r?\n/)) {
