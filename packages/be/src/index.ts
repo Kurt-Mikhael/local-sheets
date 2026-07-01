@@ -1,4 +1,4 @@
-import './env.js'
+// ponytail: --env-file=.env is a Node 20+ built-in; replace with dotenv only if a CLI flag isn't enough.
 import express from 'express'
 import { createServer } from 'node:http'
 import { authRouter } from './routes/auth.js'
@@ -6,6 +6,7 @@ import { meRouter } from './routes/me.js'
 import { syncRouter } from './routes/sync.js'
 import { adminRouter } from './routes/admin.js'
 import { sharedRouter } from './routes/shared.js'
+import { workbooksRouter } from './routes/workbooks.js'
 import { handleCollabUpgrade } from './routes/collab.js'
 import { globalRateLimiter } from './lib/rate-limit.js'
 
@@ -41,6 +42,7 @@ app.use('/api/me', meRouter)
 app.use('/api/sync', syncRouter)
 app.use('/api/admin', adminRouter)
 app.use('/api/shared', sharedRouter)
+app.use('/api/workbooks', workbooksRouter)
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true })
