@@ -1,5 +1,6 @@
-import type { IWorkbookRepository, ISyncTransport } from '@/lib/application/ports'
-import type { SyncChange } from '@/lib/domain/workbook'
+import type { SyncChange } from 'shared/src/workbook'
+import type { DexieWorkbookRepository } from '../infrastructure/local/dexie-workbook-repository'
+import type { HttpSyncTransport } from '../infrastructure/remote/http-sync-transport'
 
 export interface SyncRunResult {
   acked: number
@@ -13,19 +14,11 @@ export class SyncService {
   private runningAccountId?: string
 
   constructor(
-    private readonly repository: IWorkbookRepository,
-    private readonly transport: ISyncTransport,
+    private readonly repository: DexieWorkbookRepository,
+    private readonly transport: HttpSyncTransport,
   ) {}
 
   run(accountId: string, accountRole: 'user' | 'admin' = 'user'): Promise<SyncRunResult> {
-    if (accountRole === 'user') {
-      return Promise.resolve({
-        acked: 0,
-        conflicts: 0,
-        remoteApplied: [],
-        remoteConflicts: [],
-      })
-    }
     if (this.running) {
       if (this.runningAccountId !== accountId) {
         return Promise.reject(new Error('LOCAL_ACCOUNT_MISMATCH'))
@@ -43,13 +36,7 @@ export class SyncService {
   private async execute(accountId: string): Promise<SyncRunResult> {
     await this.repository.ensureAccountBinding(accountId)
 
-    const aggregate: SyncRunResult = {
-      acked: 0,
-      conflicts: 0,
-      remoteApplied: [],
-      remoteConflicts: [],
-    }
-
+    const aggregate: SyncRunResult = { acked: 0, conflicts: 0, remoteApplied: [], remoteConflicts: [] }
     let hasMore = true
     let page = 0
     let pushEnabled = true
@@ -63,10 +50,10 @@ export class SyncService {
       const changes: SyncChange[] = pending.map((item) => ({
         operationId: item.operationId,
         workbookId: item.workbookId,
-        baseVersion: item.baseVersion,
+        baseVersion: Number(item.baseVersion),
         title: item.title,
         snapshot: item.snapshot,
-        deleted: item.deleted,
+        deleted: Boolean(item.deleted),
         clientUpdatedAt: item.updatedAt,
       }))
 
