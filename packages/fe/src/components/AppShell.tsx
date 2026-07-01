@@ -1,19 +1,19 @@
 import { Link, useLocation } from 'react-router-dom'
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { createEmptyWorkbook, createEmptyWorkbookWithId, type WorkbookSnapshot } from '@/lib/domain/workbook'
+import { createEmptyWorkbookWithId, type WorkbookSnapshot } from '@/lib/domain/workbook'
 import { workbookRepository, syncService } from '@/lib/client/composition'
 import { localDb } from '@/lib/client/db'
-import { createAdminWorkbook } from '@/lib/client/admin-api'
-import { clearCachedAccount, readCachedAccount, writeCachedAccount } from '@/lib/client/account-cache'
+import { createAdminWorkbook, getWorkbookSnapshot, listMyWorkbooks, type MyWorkbook } from '@/lib/client/admin-api'
+import { downloadWorkbookAsXlsx } from '@/lib/client/xlsx-export'
+import {
+  clearCachedAccount,
+  readCachedAccount,
+  writeCachedAccount,
+  type Account,
+} from '@/lib/client/account-cache'
 
 const SpreadsheetEditor = lazy(() => import('@/components/SpreadsheetEditor'))
-
-interface Account {
-  id: string
-  email: string
-  role: 'user' | 'admin'
-}
 
 type SyncStatus = 'idle' | 'syncing' | 'offline' | 'login-required' | 'error' | 'done'
 
@@ -29,11 +29,7 @@ export default function AppShell() {
     () => localDb.workbooks.orderBy('updatedAt').reverse().toArray(),
     [],
   )
-
-  const visibleWorkbooks = useMemo(
-    () => (workbooks ?? []).filter((item) => item.syncState !== 'deleted'),
-    [workbooks],
-  )
+  const visibleWorkbooks = (workbooks ?? []).filter((item) => item.syncState !== 'deleted')
 
   const [activeId, setActiveId] = useState<string>()
   const [account, setAccount] = useState<Account | null>(() => {
@@ -45,16 +41,23 @@ export default function AppShell() {
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle')
   const [syncMessage, setSyncMessage] = useState('')
   const [editorSeed, setEditorSeed] = useState<EditorSeed | null>(null)
-  const [sharedWorkbookIds, setSharedWorkbookIds] = useState<string[]>([])
+  const [renameValue, setRenameValue] = useState('')
 
   const seededWorkbookIdRef = useRef<string | null>(null)
   const lastAccountFetchAt = useRef<number>(0)
+  const univerHandleRef = useRef<{ workbookId: string; getSnapshot: () => WorkbookSnapshot | null; forceSave: () => Promise<void> } | null>(null)
+  const [exporting, setExporting] = useState(false)
   const accountFetchInFlight = useRef<Promise<Account | null> | null>(null)
+  const autoSyncInFlightRef = useRef<Promise<void> | null>(null)
+  const autoSyncAccountIdRef = useRef<string | null>(null)
 
   const resolvedActiveId = activeId ?? visibleWorkbooks[0]?.id
   const active = visibleWorkbooks.find((item) => item.id === resolvedActiveId)
-
   const isAdmin = account?.role === 'admin'
+
+  useEffect(() => {
+    if (active && active.title !== renameValue) setRenameValue(active.title)
+  }, [active?.id, active?.title])
 
   const loadAccount = useCallback(async (): Promise<Account | null> => {
     if (!navigator.onLine) return null
@@ -67,17 +70,12 @@ export default function AppShell() {
 
     const inflight = (async (): Promise<Account | null> => {
       try {
-        const response = await fetch('/api/me', {
-          cache: 'no-store',
-          credentials: 'same-origin',
-        })
-
+        const response = await fetch('/api/me', { cache: 'no-store', credentials: 'same-origin' })
         if (!response.ok) {
           clearCachedAccount()
           setAccount(null)
           return null
         }
-
         const payload = (await response.json()) as { user: Account }
         writeCachedAccount(payload.user)
         setAccount(payload.user)
@@ -94,20 +92,49 @@ export default function AppShell() {
     return inflight
   }, [])
 
-  const loadSharedWorkbooks = useCallback(async (): Promise<string[]> => {
+  const syncRemoteWorkbooks = useCallback(async (force = false): Promise<MyWorkbook[]> => {
     if (!navigator.onLine) return []
     try {
-      const response = await fetch('/api/shared/workbooks', {
-        cache: 'no-store',
-        credentials: 'same-origin',
+      const remote = await listMyWorkbooks()
+      const remoteIds = new Set(remote.map((wb) => wb.id))
+
+      const local = await localDb.workbooks.toArray()
+      const localById = new Map(local.map((wb) => [wb.id, wb]))
+      const stray = local.filter((wb) => !remoteIds.has(wb.id) && wb.syncState !== 'deleted')
+
+      const toFetch = force
+        ? remote
+        : remote.filter((wb) => !localById.has(wb.id) || localById.get(wb.id)!.serverVersion < wb.version)
+      const snapshots = await Promise.all(
+        toFetch.map((wb) =>
+          getWorkbookSnapshot(wb.id).catch(() => null),
+        ),
+      )
+
+      await localDb.transaction('rw', localDb.workbooks, localDb.outbox, async () => {
+        for (const wb of stray) {
+          await localDb.workbooks.delete(wb.id)
+          await localDb.outbox.delete(wb.id)
+        }
+        for (let i = 0; i < toFetch.length; i += 1) {
+          const meta = toFetch[i]
+          const snap = snapshots[i]
+          if (!snap) continue
+          await localDb.workbooks.put({
+            id: meta.id,
+            title: snap.title,
+            snapshot: snap.snapshot as WorkbookSnapshot,
+            serverVersion: snap.version,
+            createdAt: snap.updatedAt,
+            updatedAt: snap.updatedAt,
+            lastSyncedAt: snap.updatedAt,
+            syncState: 'synced',
+            conflict: undefined,
+          })
+        }
       })
-      if (!response.ok) {
-        setSharedWorkbookIds([])
-        return []
-      }
-      const payload = (await response.json()) as { workbookIds: string[] }
-      setSharedWorkbookIds(payload.workbookIds)
-      return payload.workbookIds
+
+      return remote
     } catch {
       return []
     }
@@ -116,9 +143,7 @@ export default function AppShell() {
   const reloadEditorFromDb = useCallback(async (workbookId: string) => {
     const latest = await localDb.workbooks.get(workbookId)
     if (!latest || latest.syncState === 'deleted') return
-
     seededWorkbookIdRef.current = latest.id
-
     setEditorSeed((prev) => ({
       workbookId: latest.id,
       snapshot: latest.snapshot,
@@ -126,13 +151,84 @@ export default function AppShell() {
     }))
   }, [])
 
+  const runAutoSync = useCallback(async (currentAccount: Account, reason: 'login' | 'reconnect') => {
+    if (autoSyncInFlightRef.current) return autoSyncInFlightRef.current
+    const inflight = (async () => {
+      if (univerHandleRef.current) await univerHandleRef.current.forceSave()
+      setSyncStatus('syncing')
+      setSyncMessage(reason === 'reconnect' ? 'Kembali online. Menyinkronkan…' : 'Mengambil workbook terbaru dari server…')
+      try {
+        if (currentAccount.role === 'admin') {
+          const pushResult = await syncService.run(currentAccount.id, currentAccount.role)
+          if (pushResult.acked > 0) {
+            setSyncMessage(`Mengirim ${pushResult.acked} perubahan lokal ke server…`)
+          }
+        }
+        const remote = await syncRemoteWorkbooks()
+        if (resolvedActiveId) {
+          await reloadEditorFromDb(resolvedActiveId).catch(() => undefined)
+        }
+        const hasConflicts = (await localDb.workbooks.toArray()).some((wb) => wb.conflict !== undefined)
+        setSyncStatus(hasConflicts ? 'error' : 'done')
+        setSyncMessage(
+          hasConflicts
+            ? 'Sinkron selesai. Ada konflik yang perlu dipilih.'
+            : remote.length > 0
+              ? `Sinkron otomatis selesai. ${remote.length} workbook tersedia.`
+              : 'Sinkron otomatis selesai.',
+        )
+      } catch (error) {
+        setSyncStatus('error')
+        setSyncMessage(
+          error instanceof Error && error.message === 'LOGIN_REQUIRED'
+            ? 'Sesi berakhir. Masuk lagi untuk menyinkronkan.'
+            : 'Sinkron otomatis gagal. Klik Sinkronkan untuk mencoba lagi.',
+        )
+      }
+    })()
+    autoSyncInFlightRef.current = inflight
+    try {
+      await inflight
+    } finally {
+      autoSyncInFlightRef.current = null
+    }
+  }, [syncRemoteWorkbooks, resolvedActiveId, reloadEditorFromDb])
+
+  const pullFromServer = useCallback(async () => {
+    if (!navigator.onLine) {
+      setSyncStatus('offline')
+      setSyncMessage('Tidak dapat menarik dari server saat offline.')
+      return
+    }
+    setSyncStatus('syncing')
+    setSyncMessage('Menarik workbook terbaru dari server…')
+    try {
+      const remote = await syncRemoteWorkbooks(true)
+      if (resolvedActiveId) {
+        await reloadEditorFromDb(resolvedActiveId).catch(() => undefined)
+      }
+      setSyncStatus('done')
+      setSyncMessage(
+        remote.length > 0
+          ? `Berhasil menarik ${remote.length} workbook dari server.`
+          : 'Tidak ada workbook di server.',
+      )
+    } catch {
+      setSyncStatus('error')
+      setSyncMessage('Gagal menarik dari server.')
+    }
+  }, [syncRemoteWorkbooks, resolvedActiveId, reloadEditorFromDb])
+
   const syncNow = useCallback(async () => {
     if (!navigator.onLine) {
       setSyncStatus('offline')
       setSyncMessage('Perubahan aman di perangkat. Sinkronisasi menunggu koneksi.')
       return
     }
-
+    if (autoSyncInFlightRef.current) {
+      await autoSyncInFlightRef.current
+    }
+    if (univerHandleRef.current) await univerHandleRef.current.forceSave()
     setSyncStatus('syncing')
     setSyncMessage('Menyinkronkan perubahan…')
 
@@ -145,20 +241,19 @@ export default function AppShell() {
       }
 
       const result = await syncService.run(currentAccount.id, currentAccount.role)
-
       if (resolvedActiveId && result.remoteApplied.includes(resolvedActiveId)) {
         await reloadEditorFromDb(resolvedActiveId)
       }
 
-      setSyncStatus(result.conflicts || result.remoteConflicts.length ? 'error' : 'done')
+      const hasConflicts = result.conflicts > 0 || result.remoteConflicts.length > 0
+      setSyncStatus(hasConflicts ? 'error' : 'done')
       setSyncMessage(
-        result.conflicts || result.remoteConflicts.length
+        hasConflicts
           ? 'Sinkronisasi selesai dengan konflik yang perlu dipilih.'
           : `Sinkronisasi selesai. ${result.acked} perubahan dikirim.`,
       )
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Sinkronisasi gagal.'
-
       if (message === 'LOCAL_ACCOUNT_MISMATCH') {
         setSyncStatus('error')
         setSyncMessage(
@@ -176,162 +271,111 @@ export default function AppShell() {
   }, [account, loadAccount, reloadEditorFromDb, resolvedActiveId])
 
   useEffect(() => {
-    const initialAccountTimer = window.setTimeout(() => {
-      void loadAccount()
-    }, 0)
-
+    void loadAccount()
     const onOnline = () => {
       setOnline(true)
       void loadAccount()
-      void syncNow()
     }
-
     const onOffline = () => {
       setOnline(false)
       setSyncStatus('offline')
       setSyncMessage('Mode offline aktif. Perubahan disimpan ke IndexedDB.')
     }
-
     window.addEventListener('online', onOnline)
     window.addEventListener('offline', onOffline)
-
-    const timer = window.setInterval(() => {
-      if (navigator.onLine) void syncNow()
-    }, 60_000)
-
     return () => {
       window.removeEventListener('online', onOnline)
       window.removeEventListener('offline', onOffline)
-      window.clearTimeout(initialAccountTimer)
-      window.clearInterval(timer)
     }
-  }, [loadAccount, syncNow])
-
-  useEffect(() => {
-    if (!account) return
-    if (account.role === 'user') {
-      void loadSharedWorkbooks()
-    }
-  }, [account, loadSharedWorkbooks])
-
-  useEffect(() => {
-    if (!account || account.role !== 'user') return
-    if (!workbooks) return
-
-    const allowed = new Set(sharedWorkbookIds)
-    const stray = workbooks.filter((wb) => !allowed.has(wb.id))
-    if (stray.length === 0) return
-
-    void (async () => {
-      await localDb.transaction('rw', localDb.workbooks, localDb.outbox, async () => {
-        for (const wb of stray) {
-          await localDb.workbooks.delete(wb.id)
-          await localDb.outbox.delete(wb.id)
-        }
-      })
-    })()
-  }, [account, workbooks, sharedWorkbookIds])
-
-  useEffect(() => {
-    if (!account || account.role !== 'user') return
-    if (sharedWorkbookIds.length === 0) return
-
-    const allowed = new Set(sharedWorkbookIds)
-    void (async () => {
-      const all = await localDb.outbox.toArray()
-      const toClear = all.filter((row) => allowed.has(row.workbookId))
-      if (toClear.length === 0) return
-      await localDb.transaction('rw', localDb.outbox, async () => {
-        for (const row of toClear) {
-          await localDb.outbox.delete(row.workbookId)
-        }
-      })
-    })()
-  }, [account, sharedWorkbookIds])
-
-  useEffect(() => {
-    if (!workbooks) return
-    const params = new URLSearchParams(location.search)
-    const target = params.get('workbook')
-    if (!target) return
-    if (workbooks.some((wb) => wb.id === target)) {
-      setActiveId(target)
-      return
-    }
-    if (account && account.role === 'user' && !sharedWorkbookIds.includes(target)) {
-      return
-    }
-    const empty = createEmptyWorkbook(`Workbook ${target.slice(0, 8)}`)
-    const seed = {
-      ...empty,
-      id: target,
-      title: `Workbook ${target.slice(0, 8)}`,
-      syncState: 'synced' as const,
-      serverVersion: 0,
-    }
-    void localDb.workbooks.put(seed).then(() => {
-      setActiveId(target)
-    })
-  }, [workbooks, location.search, account, sharedWorkbookIds])
+  }, [loadAccount])
 
   useEffect(() => {
     if (!active) return
     if (seededWorkbookIdRef.current === active.id) return
-
     seededWorkbookIdRef.current = active.id
-    setEditorSeed({
-      workbookId: active.id,
-      snapshot: active.snapshot,
-      revision: 0,
-    })
+    setEditorSeed({ workbookId: active.id, snapshot: active.snapshot, revision: 0 })
   }, [active?.id])
+
+  useEffect(() => {
+    if (!account || !navigator.onLine) return
+    if (autoSyncAccountIdRef.current === account.id) return
+    autoSyncAccountIdRef.current = account.id
+    void runAutoSync(account, 'login')
+  }, [account, runAutoSync])
+
+  useEffect(() => {
+    if (!online || !account) return
+    void runAutoSync(account, 'reconnect')
+  }, [online, account, runAutoSync])
+
+  useEffect(() => {
+    if (!workbooks || !account) return
+    const target = new URLSearchParams(location.search).get('workbook')
+    if (!target) return
+    if (workbooks.some((wb) => wb.id === target)) {
+      setActiveId(target)
+    }
+  }, [workbooks, location.search, account])
 
   const handlePersistSnapshot = useCallback((workbookId: string, snapshot: WorkbookSnapshot) => {
     void workbookRepository.saveSnapshot(workbookId, snapshot)
   }, [])
 
+  const handleUniverReady = useCallback(
+    (workbookId: string, handle: { getSnapshot: () => WorkbookSnapshot | null; forceSave: () => Promise<void> }) => {
+      univerHandleRef.current = { workbookId, getSnapshot: handle.getSnapshot, forceSave: handle.forceSave }
+    },
+    [],
+  )
+
+  useEffect(() => {
+    if (activeId && univerHandleRef.current?.workbookId !== activeId) {
+      univerHandleRef.current = null
+    }
+  }, [activeId])
+
+  const exportActiveWorkbook = async () => {
+    const handle = univerHandleRef.current
+    if (!handle || !active) return
+    setExporting(true)
+    try {
+      let snapshot: WorkbookSnapshot | null = handle.getSnapshot()
+      if (!snapshot) snapshot = (await localDb.workbooks.get(active.id))?.snapshot ?? null
+      if (!snapshot) {
+        setSyncStatus('error')
+        setSyncMessage('Tidak dapat membuat snapshot workbook untuk export.')
+        return
+      }
+      const safeName = active.title.replace(/[\\/?*[\]:]/g, ' ').trim() || 'workbook'
+      await downloadWorkbookAsXlsx(snapshot, safeName)
+    } catch (error) {
+      setSyncStatus('error')
+      setSyncMessage(error instanceof Error ? `Gagal export XLSX: ${error.message}` : 'Gagal export XLSX.')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const createWorkbook = async () => {
     if (!isAdmin) return
-    const title = `Workbook ${visibleWorkbooks.length + 1}`
+    const title = window.prompt('Nama workbook baru:', `Workbook ${visibleWorkbooks.length + 1}`)?.trim()
+    if (!title) return
     try {
       const remote = await createAdminWorkbook({ title })
-      const workbook = createEmptyWorkbookWithId(remote.workbookId, remote.title || title)
+      const workbook = createEmptyWorkbookWithId(remote.workbookId, remote.title)
       await workbookRepository.create(workbook)
       setActiveId(workbook.id)
     } catch (error) {
       setSyncStatus('error')
-      setSyncMessage(
-        error instanceof Error ? `Gagal membuat workbook: ${error.message}` : 'Gagal membuat workbook.',
-      )
+      setSyncMessage(error instanceof Error ? `Gagal membuat workbook: ${error.message}` : 'Gagal membuat workbook.')
     }
-  }
-
-  const openSharedWorkbook = async (workbookId: string) => {
-    const existing = await localDb.workbooks.get(workbookId)
-    if (existing) {
-      setActiveId(workbookId)
-      return
-    }
-    const empty = createEmptyWorkbook(`Shared ${workbookId.slice(0, 8)}`)
-    const placeholder = {
-      ...empty,
-      id: workbookId,
-      title: `Shared ${workbookId.slice(0, 8)}`,
-      syncState: 'synced' as const,
-      serverVersion: 0,
-    }
-    await localDb.workbooks.put(placeholder)
-    setActiveId(workbookId)
   }
 
   const removeWorkbook = async () => {
     if (!active || !window.confirm(`Hapus "${active.title}"?`)) return
-
     await workbookRepository.markDeleted(active.id)
-
     const next = visibleWorkbooks.find((item) => item.id !== active.id)
     setActiveId(next?.id)
-
     if (navigator.onLine) void syncNow()
   }
 
@@ -341,7 +385,6 @@ export default function AppShell() {
       headers: { 'X-Requested-With': 'offline-spreadsheet' },
       credentials: 'same-origin',
     })
-
     clearCachedAccount()
     setAccount(null)
     setSyncMessage('Keluar dari akun. Data lokal tetap tersedia di perangkat ini.')
@@ -389,6 +432,15 @@ export default function AppShell() {
           <button
             type="button"
             className="secondary-button"
+            onClick={() => void pullFromServer()}
+            disabled={syncStatus === 'syncing'}
+            title="Timpa IndexedDB lokal dengan snapshot dari server (tidak mempengaruhi workbook orang lain)"
+          >
+            Tarik dari Server
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
             onClick={() => void syncNow()}
             disabled={syncStatus === 'syncing'}
           >
@@ -398,9 +450,7 @@ export default function AppShell() {
           {account ? (
             <>
               {account.role === 'admin' && (
-                <Link to="/admin" className="text-button">
-                  Panel Admin
-                </Link>
+                <Link to="/admin" className="text-button">Panel Admin</Link>
               )}
               <span className="account-label">{account.email}</span>
               <button type="button" className="text-button" onClick={() => void logout()}>
@@ -410,9 +460,7 @@ export default function AppShell() {
           ) : (
             <>
               <Link to="/login">Masuk</Link>
-              <Link to="/register" className="primary-link">
-                Daftar
-              </Link>
+              <Link to="/register" className="primary-link">Daftar</Link>
             </>
           )}
         </div>
@@ -441,33 +489,12 @@ export default function AppShell() {
                 key={workbook.id}
                 data-workbook-id={workbook.id}
                 className={`workbook-item ${active?.id === workbook.id ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveId(workbook.id)
-                }}
+                onClick={() => setActiveId(workbook.id)}
               >
                 <span>{workbook.title}</span>
                 <small>{workbook.syncState}</small>
               </button>
             ))}
-            {!isAdmin && sharedWorkbookIds.length > 0 && (
-              <div className="shared-list">
-                <h3 className="shared-heading">Dibagikan admin</h3>
-                {sharedWorkbookIds.map((id) => (
-                  <button
-                    type="button"
-                    key={id}
-                    data-shared-workbook-id={id}
-                    className={`workbook-item shared-item`}
-                    onClick={() => {
-                      void openSharedWorkbook(id)
-                    }}
-                  >
-                    <span>Workbook {id.slice(0, 8)}</span>
-                    <small>shared</small>
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
 
           <div className="sidebar-footer">
@@ -480,21 +507,30 @@ export default function AppShell() {
             <>
               <div className="document-bar">
                 <input
-                  key={`${active.id}:${active.title}`}
-                  defaultValue={active.title}
+                  value={renameValue}
                   maxLength={120}
                   aria-label="Nama workbook"
-                  onBlur={(event) => void workbookRepository.rename(active.id, event.target.value)}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onBlur={() => {
+                    if (renameValue.trim() && renameValue !== active.title) {
+                      void workbookRepository.rename(active.id, renameValue)
+                    }
+                  }}
                 />
 
                 <div className="document-actions">
                   <span className={`sync-state state-${active.syncState}`}>{active.syncState}</span>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => void exportActiveWorkbook()}
+                    disabled={exporting}
+                    title="Unduh sebagai Excel"
+                  >
+                    {exporting ? 'Menyiapkan…' : 'Download Excel'}
+                  </button>
                   {isAdmin && (
-                    <button
-                      type="button"
-                      className="danger-button"
-                      onClick={() => void removeWorkbook()}
-                    >
+                    <button type="button" className="danger-button" onClick={() => void removeWorkbook()}>
                       Hapus
                     </button>
                   )}
@@ -507,13 +543,8 @@ export default function AppShell() {
                     <strong>Konflik versi terdeteksi.</strong>
                     <p>Versi server berubah saat perangkat ini masih memiliki perubahan lokal.</p>
                   </div>
-
-                  <button type="button" onClick={() => void resolveKeepLocal()}>
-                    Timpa server dengan lokal
-                  </button>
-                  <button type="button" onClick={() => void resolveUseRemote()}>
-                    Gunakan versi server
-                  </button>
+                  <button type="button" onClick={() => void resolveKeepLocal()}>Timpa server dengan lokal</button>
+                  <button type="button" onClick={() => void resolveUseRemote()}>Gunakan versi server</button>
                 </div>
               )}
 
@@ -526,23 +557,22 @@ export default function AppShell() {
                   seedSnapshot={editorSeed.snapshot}
                   account={account}
                   onPersistSnapshot={handlePersistSnapshot}
+                  onUniverReady={(h) => handleUniverReady(editorSeed.workbookId, h)}
                 />
               </Suspense>
             </>
+          ) : account && account.role === 'user' ? (
+            <div className="empty-state empty-state-message">
+              <h2>Belum ada workbook yang dibagikan</h2>
+              <p>Hubungi admin untuk meng-assign workbook agar kamu bisa mulai mengerjakannya.</p>
+            </div>
+          ) : account && account.role === 'admin' ? (
+            <div className="empty-state empty-state-message">
+              <h2>Belum ada workbook</h2>
+              <p>Klik tombol + di sidebar untuk membuat workbook baru.</p>
+            </div>
           ) : (
-            account && account.role === 'user' ? (
-              <div className="empty-state empty-state-message">
-                <h2>Belum ada workbook yang dibagikan</h2>
-                <p>Hubungi admin untuk meng-assign workbook agar kamu bisa mulai mengerjakannya.</p>
-              </div>
-            ) : account && account.role === 'admin' ? (
-              <div className="empty-state empty-state-message">
-                <h2>Belum ada workbook</h2>
-                <p>Klik tombol + di sidebar untuk membuat workbook baru.</p>
-              </div>
-            ) : (
-              <div className="empty-state">Memuat…</div>
-            )
+            <div className="empty-state">Memuat…</div>
           )}
         </section>
       </section>

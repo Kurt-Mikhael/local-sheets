@@ -13,12 +13,7 @@ import {
   type AdminWorkbook,
   type WorkbookAccess,
 } from '@/lib/client/admin-api'
-
-interface Account {
-  id: string
-  email: string
-  role: 'user' | 'admin'
-}
+import type { Account } from '@/lib/client/account-cache'
 
 type Tab = 'workbooks' | 'users'
 
@@ -38,23 +33,13 @@ export default function AdminPage() {
     void (async () => {
       try {
         const res = await fetch('/api/me', { cache: 'no-store', credentials: 'same-origin' })
-        if (!res.ok) {
-          if (!cancelled) {
-            setAccountReady(true)
-            setAccount(null)
-          }
-          return
-        }
+        if (!res.ok) return
         const payload = (await res.json()) as { user: Account }
-        if (!cancelled) {
-          setAccount(payload.user)
-          setAccountReady(true)
-        }
+        if (!cancelled) setAccount(payload.user)
       } catch {
-        if (!cancelled) {
-          setAccountReady(true)
-          setAccount(null)
-        }
+        // offline; account stays null and we show the access-denied screen
+      } finally {
+        if (!cancelled) setAccountReady(true)
       }
     })()
     return () => {
@@ -64,8 +49,7 @@ export default function AdminPage() {
 
   const refreshWorkbooks = useCallback(async () => {
     try {
-      const list = await listAdminWorkbooks()
-      setWorkbooks(list)
+      setWorkbooks(await listAdminWorkbooks())
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Gagal memuat workbook')
     }
@@ -73,25 +57,22 @@ export default function AdminPage() {
 
   const refreshUsers = useCallback(async () => {
     try {
-      const list = await listAdminUsers()
-      setUsers(list)
+      setUsers(await listAdminUsers())
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Gagal memuat user')
     }
   }, [])
 
   useEffect(() => {
-    if (!accountReady || !account || account.role !== 'admin') return
+    if (account?.role !== 'admin') return
     void refreshWorkbooks()
     void refreshUsers()
-  }, [accountReady, account, refreshWorkbooks, refreshUsers])
+  }, [account, refreshWorkbooks, refreshUsers])
 
   if (!accountReady) {
     return (
       <main className="auth-page">
-        <section className="auth-card">
-          <p>Memuat…</p>
-        </section>
+        <section className="auth-card"><p>Memuat…</p></section>
       </main>
     )
   }
@@ -158,13 +139,7 @@ export default function AdminPage() {
           navigate={navigate}
         />
       ) : (
-        <UserPanel
-          users={users}
-          busy={busy}
-          setBusy={setBusy}
-          setError={setError}
-          onChanged={refreshUsers}
-        />
+        <UserPanel users={users} busy={busy} setBusy={setBusy} setError={setError} onChanged={refreshUsers} />
       )}
     </main>
   )
@@ -246,8 +221,9 @@ function WorkbookPanel({ workbooks, users, busy, setBusy, setError, onChanged, n
             {workbooks.map((wb) => (
               <li key={wb.id} className="admin-list-item">
                 <div className="admin-list-main">
-                  <code className="admin-id">{wb.id.slice(0, 8)}</code>
-                  <span className="muted"> — {wb.ownerEmail} ({wb.ownerRole})</span>
+                  <strong>{wb.title}</strong>
+                  <code className="admin-id"> · {wb.id.slice(0, 8)}</code>
+                  <span className="muted"> — {wb.ownerEmail}</span>
                   <div className="admin-list-actions">
                     <button type="button" onClick={() => handleOpen(wb.id)}>Buka</button>
                     <button
@@ -292,8 +268,7 @@ function AccessPanel({ workbookId, users, setError, onChanged }: AccessPanelProp
 
   const refresh = useCallback(async () => {
     try {
-      const list = await listWorkbookAccess(workbookId)
-      setAccess(list)
+      setAccess(await listWorkbookAccess(workbookId))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Gagal memuat akses')
     }
@@ -305,10 +280,14 @@ function AccessPanel({ workbookId, users, setError, onChanged }: AccessPanelProp
 
   async function handleShare() {
     if (!email.trim()) return
+    await shareWithEmail(email.trim().toLowerCase())
+  }
+
+  async function shareWithEmail(target: string) {
     setError('')
     setBusy(true)
     try {
-      await shareWorkbook(workbookId, email.trim().toLowerCase())
+      await shareWorkbook(workbookId, target)
       setEmail('')
       await refresh()
       void onChanged()
@@ -318,6 +297,8 @@ function AccessPanel({ workbookId, users, setError, onChanged }: AccessPanelProp
       setBusy(false)
     }
   }
+
+  const handleShareWithEmail = (target: string) => shareWithEmail(target)
 
   async function handleRevoke(userId: string) {
     setError('')
@@ -353,12 +334,7 @@ function AccessPanel({ workbookId, users, setError, onChanged }: AccessPanelProp
         <div className="candidate-list">
           <span className="muted">Saran: </span>
           {candidates.slice(0, 5).map((u) => (
-            <button
-              key={u.id}
-              type="button"
-              className="chip"
-              onClick={() => setEmail(u.email)}
-            >
+            <button key={u.id} type="button" className="chip" onClick={() => void handleShareWithEmail(u.email)}>
               {u.email}
             </button>
           ))}

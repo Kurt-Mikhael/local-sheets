@@ -1,0 +1,97 @@
+import { Router } from 'express'
+import { accountRepository } from '../repositories/account-repository.js'
+import { HttpError } from '../lib/security.js'
+import { asyncHandler } from '../lib/async-handler.js'
+import { getCurrentUser } from '../lib/session.js'
+
+export const workbooksRouter = Router()
+
+interface WorkbookListItem {
+  id: string
+  title: string
+  ownerEmail: string
+  ownerRole: string
+  version: number
+  updatedAt: string
+}
+
+type WorkbookData = Awaited<ReturnType<typeof accountRepository.findWorkbookData>>
+
+workbooksRouter.get('/', asyncHandler(async (req, res) => {
+  const user = await getCurrentUser(req)
+  if (!user) throw new HttpError(401, 'Login diperlukan.')
+
+  const items: WorkbookListItem[] = []
+
+  if (user.role === 'admin') {
+    const own = await accountRepository.listWorkbooksByOwner(user.id)
+    for (const wb of own) {
+      let data: WorkbookData = null
+      try {
+        data = await accountRepository.findWorkbookData(user.id, wb.id)
+      } catch (err) {
+        console.error('[workbooks] findWorkbookData failed for', wb.id, err)
+      }
+      items.push({
+        id: wb.id,
+        title: wb.title,
+        ownerEmail: wb.ownerEmail,
+        ownerRole: wb.ownerRole === 'admin' ? 'admin' : 'user',
+        version: data?.version ?? 0,
+        updatedAt: data?.updatedAt ?? new Date().toISOString(),
+      })
+    }
+  } else {
+    const sharedIds = await accountRepository.listSharedWorkbookIds(user.id)
+    for (const id of sharedIds) {
+      const owner = await accountRepository.findWorkbookOwner(id)
+      if (!owner) continue
+      let data: WorkbookData = null
+      try {
+        data = await accountRepository.findWorkbookData(owner.ownerId, id)
+      } catch (err) {
+        console.error('[workbooks] findWorkbookData failed for', id, err)
+        continue
+      }
+      if (!data) continue
+      items.push({
+        id,
+        title: data.title,
+        ownerEmail: user.email,
+        ownerRole: user.role,
+        version: data.version,
+        updatedAt: data.updatedAt,
+      })
+    }
+  }
+
+  res.json({ workbooks: items })
+}))
+
+workbooksRouter.get('/:id/snapshot', asyncHandler(async (req, res) => {
+  const user = await getCurrentUser(req)
+  if (!user) throw new HttpError(401, 'Login diperlukan.')
+
+  const workbookId = typeof req.params.id === 'string' ? req.params.id : ''
+  if (!workbookId) throw new HttpError(400, 'workbookId wajib diisi.')
+
+  const owner = await accountRepository.findWorkbookOwner(workbookId)
+  if (!owner) throw new HttpError(404, 'Workbook tidak ditemukan.')
+
+  const isOwner = owner.ownerId === user.id
+  if (!isOwner) {
+    const granted = await accountRepository.userHasWorkbookAccess(user.id, workbookId)
+    if (!granted) throw new HttpError(403, 'Anda tidak memiliki akses ke workbook ini.')
+  }
+
+  const data = await accountRepository.findWorkbookData(owner.ownerId, workbookId)
+  if (!data) throw new HttpError(404, 'Snapshot workbook belum tersedia di server.')
+
+  res.json({
+    workbookId,
+    title: data.title,
+    version: data.version,
+    snapshot: data.snapshot,
+    updatedAt: data.updatedAt,
+  })
+}))

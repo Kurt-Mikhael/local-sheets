@@ -1,17 +1,14 @@
 import { Routes, Route } from 'react-router-dom'
-import HomePage from './pages/HomePage'
-import LoginPage from './pages/LoginPage'
-import RegisterPage from './pages/RegisterPage'
-import OfflinePage from './pages/OfflinePage'
+import AppShell from './components/AppShell'
+import AuthForm from './components/AuthForm'
 import AdminPage from './pages/AdminPage'
 
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<HomePage />} />
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/register" element={<RegisterPage />} />
-      <Route path="/offline" element={<OfflinePage />} />
+      <Route path="/" element={<AppShell />} />
+      <Route path="/login" element={<AuthForm mode="login" />} />
+      <Route path="/register" element={<AuthForm mode="register" />} />
       <Route path="/admin" element={<AdminPage />} />
     </Routes>
   )
