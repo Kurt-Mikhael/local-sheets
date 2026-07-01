@@ -1,7 +1,6 @@
-import type { ISyncTransport } from '@/lib/application/ports'
-import type { SyncRequest, SyncResponse } from '@/lib/domain/workbook'
+import type { SyncRequest, SyncResponse } from 'shared/src/workbook'
 
-export class HttpSyncTransport implements ISyncTransport {
+export class HttpSyncTransport {
   async synchronize(request: SyncRequest): Promise<SyncResponse> {
     const response = await fetch('/api/sync', {
       method: 'POST',
