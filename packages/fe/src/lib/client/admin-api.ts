@@ -1,8 +1,6 @@
-export interface AdminUser {
-  id: string
-  email: string
-  role: 'user' | 'admin'
-}
+import type { Account } from './account-cache'
+
+export type AdminUser = Account
 
 export interface WorkbookAccess {
   userId: string
@@ -10,20 +8,26 @@ export interface WorkbookAccess {
   grantedAt: string
 }
 
-interface ApiOptions {
+export interface AdminWorkbook {
+  id: string
+  title: string
+  ownerEmail: string
+}
+
+interface AdminInit {
   method?: 'GET' | 'POST' | 'DELETE'
   body?: unknown
 }
 
-async function adminFetch<T>(path: string, opts: ApiOptions = {}): Promise<T> {
+async function adminFetch<T>(path: string, init: AdminInit = {}): Promise<T> {
   const res = await fetch(`/api/admin${path}`, {
-    method: opts.method ?? 'GET',
+    method: init.method ?? 'GET',
     headers: {
       'Content-Type': 'application/json',
       'X-Requested-With': 'offline-spreadsheet',
     },
     credentials: 'same-origin',
-    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+    body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
   })
   if (!res.ok) {
     const err = (await res.json().catch(() => ({ error: 'Request gagal' }))) as { error?: string }
@@ -32,57 +36,63 @@ async function adminFetch<T>(path: string, opts: ApiOptions = {}): Promise<T> {
   return (await res.json()) as T
 }
 
-export interface AdminWorkbook {
-  id: string
-  ownerEmail: string
-  ownerRole: string
-}
+export const listAdminWorkbooks = () =>
+  adminFetch<{ workbooks: AdminWorkbook[] }>('/workbooks').then((r) => r.workbooks)
 
-export async function listAdminWorkbooks(): Promise<AdminWorkbook[]> {
-  const result = await adminFetch<{ workbooks: AdminWorkbook[] }>('/workbooks')
-  return result.workbooks
-}
-
-export async function createAdminWorkbook(payload: {
-  workbookId?: string
-  title?: string
-  userId?: string
-}): Promise<{ workbookId: string; ownerId: string; title: string; createdBy: string }> {
-  return adminFetch<{ workbookId: string; ownerId: string; title: string; createdBy: string }>(
-    '/workbooks',
-    { method: 'POST', body: payload },
-  )
-}
-
-export async function deleteAdminWorkbook(workbookId: string): Promise<void> {
-  await adminFetch<{ ok: true }>(`/workbooks/${workbookId}`, { method: 'DELETE' })
-}
-
-export async function listAdminUsers(): Promise<AdminUser[]> {
-  const result = await adminFetch<{ users: AdminUser[] }>('/users')
-  return result.users
-}
-
-export async function createAdminUser(payload: { email: string; password: string }): Promise<AdminUser> {
-  const result = await adminFetch<{ user: AdminUser }>('/users', {
+export const createAdminWorkbook = (payload: { workbookId?: string; title: string; userId?: string }) =>
+  adminFetch<{ workbookId: string; ownerId: string; title: string; createdBy: string }>('/workbooks', {
     method: 'POST',
     body: payload,
   })
-  return result.user
-}
 
-export async function shareWorkbook(workbookId: string, email: string): Promise<{ userId: string; email: string }> {
-  return adminFetch<{ userId: string; email: string }>(`/workbooks/${workbookId}/share`, {
+export const deleteAdminWorkbook = (workbookId: string) =>
+  adminFetch<{ ok: true }>(`/workbooks/${workbookId}`, { method: 'DELETE' })
+
+export const listAdminUsers = () =>
+  adminFetch<{ users: AdminUser[] }>('/users').then((r) => r.users)
+
+export const createAdminUser = (payload: { email: string; password: string }) =>
+  adminFetch<{ user: AdminUser }>('/users', { method: 'POST', body: payload }).then((r) => r.user)
+
+export const shareWorkbook = (workbookId: string, email: string) =>
+  adminFetch<{ userId: string; email: string }>(`/workbooks/${workbookId}/share`, {
     method: 'POST',
     body: { email },
   })
+
+export const revokeWorkbook = (workbookId: string, userId: string) =>
+  adminFetch<{ ok: true }>(`/workbooks/${workbookId}/share/${userId}`, { method: 'DELETE' })
+
+export const listWorkbookAccess = (workbookId: string) =>
+  adminFetch<{ access: WorkbookAccess[] }>(`/workbooks/${workbookId}/access`).then((r) => r.access)
+
+export interface MyWorkbook {
+  id: string
+  title: string
+  ownerEmail: string
+  ownerRole: 'user' | 'admin'
+  version: number
+  updatedAt: string
 }
 
-export async function revokeWorkbook(workbookId: string, userId: string): Promise<void> {
-  await adminFetch<{ ok: true }>(`/workbooks/${workbookId}/share/${userId}`, { method: 'DELETE' })
+export const listMyWorkbooks = async (): Promise<MyWorkbook[]> => {
+  const res = await fetch('/api/workbooks', { cache: 'no-store', credentials: 'same-origin' })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const data = (await res.json()) as { workbooks: MyWorkbook[] }
+  return data.workbooks
 }
 
-export async function listWorkbookAccess(workbookId: string): Promise<WorkbookAccess[]> {
-  const result = await adminFetch<{ access: WorkbookAccess[] }>(`/workbooks/${workbookId}/access`)
-  return result.access
+export const getWorkbookSnapshot = async (workbookId: string) => {
+  const res = await fetch(`/api/workbooks/${workbookId}/snapshot`, {
+    cache: 'no-store',
+    credentials: 'same-origin',
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return (await res.json()) as {
+    workbookId: string
+    title: string
+    version: number
+    updatedAt: string
+    snapshot: Record<string, unknown>
+  }
 }
