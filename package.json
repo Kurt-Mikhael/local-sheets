@@ -16,9 +16,9 @@
     "test:watch": "vitest",
     "check": "pnpm --filter fe exec tsc --noEmit && pnpm --filter be exec tsc --noEmit && vitest run",
     "test:e2e": "start-server-and-test \"pnpm dev\" \"http://localhost:3000\" \"vitest run --config vitest.e2e.config.ts\"",
-    "db:migrate": "node scripts/migrate.mjs",
-    "seed:admin": "node --experimental-strip-types scripts/seed-admin.mts",
-    "seed:demo": "node --experimental-strip-types scripts/seed-demo.mts"
+    "db:migrate": "node --env-file=.env scripts/migrate.mjs",
+    "seed:admin": "node --env-file=.env --experimental-strip-types scripts/seed-admin.mts",
+    "seed:demo": "node --env-file=.env --experimental-strip-types scripts/seed-demo.mts"
   },
   "packageManager": "pnpm@10.28.2",
   "devDependencies": {
