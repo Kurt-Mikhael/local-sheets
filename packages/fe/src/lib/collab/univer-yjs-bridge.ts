@@ -1,7 +1,6 @@
 import * as Y from 'yjs'
-import type { WorkbookSnapshot } from '@/lib/domain/workbook'
 
-export interface Account {
+export interface CollabAccount {
   id: string
   email: string
   role: 'user' | 'admin'
@@ -14,20 +13,13 @@ export interface CellMap {
   t?: number
 }
 
-type UniverCellData = Record<number, Record<number, CellMap>>
-type UniverSheets = Record<string, { cellData?: UniverCellData }>
-
-function getSheetCellData(snapshot: WorkbookSnapshot, sheetId: string): UniverCellData {
-  const sheets = (snapshot as { sheets?: UniverSheets }).sheets
-  if (!sheets) return {}
-  return sheets[sheetId]?.cellData ?? {}
-}
+type UniverSheets = Record<string, { cellData?: Record<number, Record<number, CellMap>> }>
 
 export function applyYjsCellsToSnapshot(
-  snapshot: WorkbookSnapshot,
+  snapshot: Record<string, unknown>,
   yjsCells: Y.Map<Y.Map<unknown>>,
-): WorkbookSnapshot {
-  const result = JSON.parse(JSON.stringify(snapshot)) as WorkbookSnapshot
+): Record<string, unknown> {
+  const result = structuredClone(snapshot) as Record<string, unknown>
   const sheets = (result as { sheets?: UniverSheets }).sheets
   if (!sheets) return result
 
@@ -35,50 +27,103 @@ export function applyYjsCellsToSnapshot(
     const parsed = parseKey(key)
     if (!parsed) return
     const { sheetId, row, col } = parsed
-    if (!sheets[sheetId]) return
-    if (!sheets[sheetId].cellData) sheets[sheetId].cellData = {}
-    if (!sheets[sheetId].cellData![row]) sheets[sheetId].cellData![row] = {}
+    const sheet = sheets[sheetId]
+    if (!sheet) return
+    if (!sheet.cellData) sheet.cellData = {}
+    if (!sheet.cellData[row]) sheet.cellData[row] = {}
 
     const data = cellMap.toJSON() as CellMap
     if (data.v === undefined && data.f === undefined && data.s === undefined) {
-      delete sheets[sheetId].cellData![row][col]
+      delete sheet.cellData[row][col]
       return
     }
-    sheets[sheetId].cellData![row][col] = data
+    sheet.cellData[row][col] = data
   })
 
   return result
 }
 
-export function syncCellsToYjs(
-  snapshot: WorkbookSnapshot,
+// ponytail: align the snapshot's sheet IDs with whatever sheet ID yjs is using so the observer can find them.
+// when no yjs cells exist yet, fall back to the snapshot's first sheet so it stays stable across pulls.
+export function unifySheetIds(
+  snapshot: Record<string, unknown>,
   yjsCells: Y.Map<Y.Map<unknown>>,
-  _activeSheetId: string,
+): { snapshot: Record<string, unknown>; canonicalSheetId: string } {
+  const result = structuredClone(snapshot) as Record<string, unknown>
+  const sheets = (result as { sheets?: UniverSheets }).sheets ?? {}
+
+  const snapshotSheetIds = Object.keys(sheets)
+  const yjsSheetIds = new Set<string>()
+  yjsCells.forEach((_, key) => {
+    const parsed = parseKey(key)
+    if (parsed) yjsSheetIds.add(parsed.sheetId)
+  })
+
+  let canonicalSheetId: string | null = null
+  const shared = snapshotSheetIds.find((id) => yjsSheetIds.has(id))
+  if (shared) {
+    canonicalSheetId = shared
+  } else if (yjsSheetIds.size > 0) {
+    canonicalSheetId = [...yjsSheetIds][0]
+  } else if (snapshotSheetIds.length > 0) {
+    canonicalSheetId = snapshotSheetIds[0]
+  }
+
+  if (!canonicalSheetId || snapshotSheetIds.length === 0) {
+    return { snapshot: result, canonicalSheetId: canonicalSheetId ?? '' }
+  }
+
+  if (snapshotSheetIds.length === 1 && snapshotSheetIds[0] === canonicalSheetId) {
+    return { snapshot: result, canonicalSheetId }
+  }
+
+  const rebuilt: UniverSheets = {}
+  for (const sheetId of snapshotSheetIds) {
+    if (sheetId === canonicalSheetId) {
+      rebuilt[sheetId] = sheets[sheetId]
+    } else {
+      rebuilt[canonicalSheetId] = sheets[sheetId]
+      if (rebuilt[canonicalSheetId] && typeof rebuilt[canonicalSheetId] === 'object') {
+        (rebuilt[canonicalSheetId] as { id?: string }).id = canonicalSheetId
+      }
+    }
+  }
+  ;(result as { sheets?: UniverSheets }).sheets = rebuilt
+
+  const order = (result as { sheetOrder?: string[] }).sheetOrder
+  if (order) {
+    ;(result as { sheetOrder?: string[] }).sheetOrder = order.map(() => canonicalSheetId as string)
+  }
+
+  return { snapshot: result, canonicalSheetId }
+}
+
+const CELL_KEYS = ['v', 'f', 's'] as const
+
+export function syncCellsToYjs(
+  snapshot: Record<string, unknown>,
+  yjsCells: Y.Map<Y.Map<unknown>>,
 ): void {
   const localCells = new Map<string, CellMap>()
-
   const sheets = (snapshot as { sheets?: UniverSheets }).sheets ?? {}
+
   for (const [sheetId, sheet] of Object.entries(sheets)) {
     const cellData = sheet?.cellData ?? {}
     for (const [rowStr, rowData] of Object.entries(cellData)) {
       for (const [colStr, cell] of Object.entries(rowData)) {
-        const key = makeKey(sheetId, Number(rowStr), Number(colStr))
-        localCells.set(key, cell as CellMap)
+        localCells.set(makeKey(sheetId, Number(rowStr), Number(colStr)), cell as CellMap)
       }
     }
   }
-
-  const remoteKeys = new Set<string>()
-  yjsCells.forEach((_, key) => remoteKeys.add(key))
 
   const toSet: Array<[string, CellMap]> = []
   const toDelete: string[] = []
   for (const [key, cell] of localCells) {
     if (!cellsEqual(yjsCells.get(key), cell)) toSet.push([key, cell])
   }
-  for (const key of remoteKeys) {
+  yjsCells.forEach((_, key) => {
     if (!localCells.has(key)) toDelete.push(key)
-  }
+  })
 
   if (toSet.length === 0 && toDelete.length === 0) return
 
@@ -89,31 +134,17 @@ export function syncCellsToYjs(
         cellMap = new Y.Map<unknown>()
         yjsCells.set(key, cellMap)
       }
-      setCellMapValue(cellMap, cell)
+      for (const k of CELL_KEYS) {
+        const next = cell[k]
+        if (next === undefined) {
+          cellMap.delete(k)
+        } else if (k === 's' ? JSON.stringify(cellMap.get(k) ?? null) !== JSON.stringify(next) : cellMap.get(k) !== next) {
+          cellMap.set(k, next)
+        }
+      }
     }
-    for (const key of toDelete) {
-      yjsCells.delete(key)
-    }
+    for (const key of toDelete) yjsCells.delete(key)
   }, 'local')
-}
-
-function setCellMapValue(cellMap: Y.Map<unknown>, cell: CellMap): void {
-  if (cell.v !== undefined) {
-    if (cellMap.get('v') !== cell.v) cellMap.set('v', cell.v)
-  } else {
-    cellMap.delete('v')
-  }
-  if (cell.f !== undefined) {
-    if (cellMap.get('f') !== cell.f) cellMap.set('f', cell.f)
-  } else {
-    cellMap.delete('f')
-  }
-  if (cell.s !== undefined) {
-    const current = cellMap.get('s')
-    if (JSON.stringify(current) !== JSON.stringify(cell.s)) cellMap.set('s', cell.s)
-  } else {
-    cellMap.delete('s')
-  }
 }
 
 function cellsEqual(remote: Y.Map<unknown> | undefined, local: CellMap | undefined): boolean {
