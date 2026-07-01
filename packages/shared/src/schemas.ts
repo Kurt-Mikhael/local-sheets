@@ -8,7 +8,7 @@ export const authSchema = z.object({
   password: passwordSchema,
 }).strict()
 
-const SAFE_KEY = /^(?:[a-zA-Z][a-zA-Z0-9_\-.]{0,63}|[0-9]{1,10}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/
+const SAFE_KEY = /^(?:[a-zA-Z0-9][a-zA-Z0-9_\-.]{0,127}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/
 const FORBIDDEN_KEY_RE = /^(__proto__|constructor|prototype)$/i
 
 const safeKey = z.string()
