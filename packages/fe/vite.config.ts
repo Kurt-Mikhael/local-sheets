@@ -38,6 +38,12 @@ export default defineConfig({
         target: 'http://localhost:4000',
         changeOrigin: true,
         ws: true,
+        configure(proxy) {
+          proxy.on('proxyReq', (proxyReq) => {
+            const cookie = proxyReq.getHeader('cookie')
+            if (cookie) proxyReq.setHeader('cookie', cookie)
+          })
+        },
       },
     },
   },
