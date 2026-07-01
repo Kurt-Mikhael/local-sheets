@@ -15,6 +15,8 @@ function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')
 }
 
+export { hashToken }
+
 function ttlDays(): number {
   const value = Number(process.env.SESSION_TTL_DAYS ?? 30)
   return Number.isFinite(value) && value > 0 ? Math.min(value, 90) : 30
