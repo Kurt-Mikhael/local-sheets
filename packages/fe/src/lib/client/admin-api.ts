@@ -45,6 +45,12 @@ export const createAdminWorkbook = (payload: { workbookId?: string; title: strin
     body: payload,
   })
 
+export const importAdminWorkbook = (payload: { title: string; snapshot: Record<string, unknown> }) =>
+  adminFetch<{ workbookId: string; ownerId: string; title: string; createdBy: string }>('/workbooks/import', {
+    method: 'POST',
+    body: payload,
+  })
+
 export const deleteAdminWorkbook = (workbookId: string) =>
   adminFetch<{ ok: true }>(`/workbooks/${workbookId}`, { method: 'DELETE' })
 
@@ -96,3 +102,36 @@ export const getWorkbookSnapshot = async (workbookId: string) => {
     snapshot: Record<string, unknown>
   }
 }
+
+export interface WorkbookVersion {
+  id: string
+  label: string
+  createdAt: string
+  createdBy: string | null
+  snapshotSize: number
+}
+
+export interface WorkbookVersionDetail extends WorkbookVersion {
+  workbookId: string
+  snapshot: Record<string, unknown>
+}
+
+export const listWorkbookVersions = (workbookId: string) =>
+  adminFetch<{ versions: WorkbookVersion[] }>(`/workbooks/${workbookId}/versions`).then((r) => r.versions)
+
+export const getWorkbookVersion = (workbookId: string, versionId: string) =>
+  adminFetch<{ version: WorkbookVersionDetail }>(`/workbooks/${workbookId}/versions/${versionId}`).then((r) => r.version)
+
+export const createWorkbookVersion = (workbookId: string, label: string) =>
+  adminFetch<{ version: { id: string; label: string; createdAt: string } }>(
+    `/workbooks/${workbookId}/versions`,
+    { method: 'POST', body: { label } },
+  ).then((r) => r.version)
+
+export const restoreWorkbookVersion = (workbookId: string, versionId: string) =>
+  adminFetch<{ ok: true; versionId: string }>(`/workbooks/${workbookId}/versions/${versionId}/restore`, {
+    method: 'POST',
+  })
+
+export const deleteWorkbookVersion = (workbookId: string, versionId: string) =>
+  adminFetch<{ ok: true }>(`/workbooks/${workbookId}/versions/${versionId}`, { method: 'DELETE' })
