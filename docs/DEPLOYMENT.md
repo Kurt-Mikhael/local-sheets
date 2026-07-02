@@ -2,7 +2,7 @@
 
 ## Requirements
 
-VPS Linux (Ubuntu 22.04+ / Debian 12+) — rekomendasi 1 CPU, 1 GB RAM minimum
+VPS Linux (Ubuntu 22.04+ / Debian 12+)
 
 - Domain yang sudah diarahkan ke IP VPS (lewat Cloudflare atau DNS provider)
 - Akses root / sudo
@@ -316,4 +316,4 @@ Simpan file backup di tempat aman (S3, Google Drive, dll).
 | `502 Bad Gateway`                  | Cek`systemctl status localsheet-be`                                        |
 | Login gagal                          | Cek`APP_ORIGIN` di `.env` sama persis dengan domain (pakai `https://`) |
 | WebSocket tidak konek                | Pastikan Nginx config blok`/ws/` ada & certbot tidak menghapus             |
-| Database connection error            | Cek`DATABASE_URL` password sama dengan yang dibuat di langkah 2            |
+| Database connection error            | Cek`DATABASE_URL` password sama dengan yang dibuat di langkah             |
