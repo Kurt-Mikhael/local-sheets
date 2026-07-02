@@ -45,6 +45,8 @@ export function applyYjsCellsToSnapshot(
 
 // ponytail: align the snapshot's sheet IDs with whatever sheet ID yjs is using so the observer can find them.
 // when no yjs cells exist yet, fall back to the snapshot's first sheet so it stays stable across pulls.
+// when yjs has cells for sheet IDs that the snapshot does not contain, leave the snapshot as-is — the
+// bridge should not collapse multiple sheets into one.
 export function unifySheetIds(
   snapshot: Record<string, unknown>,
   yjsCells: Y.Map<Y.Map<unknown>>,
@@ -60,39 +62,20 @@ export function unifySheetIds(
   })
 
   let canonicalSheetId: string | null = null
-  const shared = snapshotSheetIds.find((id) => yjsSheetIds.has(id))
-  if (shared) {
-    canonicalSheetId = shared
+  if (snapshotSheetIds.length > 0) {
+    canonicalSheetId = snapshotSheetIds.find((id) => yjsSheetIds.has(id)) ?? snapshotSheetIds[0]
   } else if (yjsSheetIds.size > 0) {
     canonicalSheetId = [...yjsSheetIds][0]
-  } else if (snapshotSheetIds.length > 0) {
-    canonicalSheetId = snapshotSheetIds[0]
   }
 
-  if (!canonicalSheetId || snapshotSheetIds.length === 0) {
-    return { snapshot: result, canonicalSheetId: canonicalSheetId ?? '' }
+  if (!canonicalSheetId) {
+    return { snapshot: result, canonicalSheetId: '' }
   }
 
-  if (snapshotSheetIds.length === 1 && snapshotSheetIds[0] === canonicalSheetId) {
+  // ponytail: only rewrite sheet IDs that yjs knows about AND the snapshot has them — never collapse
+  // multiple snapshot sheets onto the canonical ID. Unknown sheet IDs in yjs are simply ignored.
+  if (yjsSheetIds.has(canonicalSheetId) && snapshotSheetIds.length === 1) {
     return { snapshot: result, canonicalSheetId }
-  }
-
-  const rebuilt: UniverSheets = {}
-  for (const sheetId of snapshotSheetIds) {
-    if (sheetId === canonicalSheetId) {
-      rebuilt[sheetId] = sheets[sheetId]
-    } else {
-      rebuilt[canonicalSheetId] = sheets[sheetId]
-      if (rebuilt[canonicalSheetId] && typeof rebuilt[canonicalSheetId] === 'object') {
-        (rebuilt[canonicalSheetId] as { id?: string }).id = canonicalSheetId
-      }
-    }
-  }
-  ;(result as { sheets?: UniverSheets }).sheets = rebuilt
-
-  const order = (result as { sheetOrder?: string[] }).sheetOrder
-  if (order) {
-    ;(result as { sheetOrder?: string[] }).sheetOrder = order.map(() => canonicalSheetId as string)
   }
 
   return { snapshot: result, canonicalSheetId }
