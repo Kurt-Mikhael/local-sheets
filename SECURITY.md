@@ -1,6 +1,6 @@
 # Security Notes
 
-## Kontrol yang sudah diterapkan
+## Kontrol yang udah aman
 
 - Session token acak disimpan sebagai hash SHA-256 di database; browser hanya menerima cookie `HttpOnly`, `Secure` pada production, dan `SameSite=Strict`.
 - Cookie `__Host-` di production dengan `Secure; Path=/`; cookie name fallback ke `localsheet_session` di development.

@@ -26,14 +26,6 @@ Alur perubahan:
 6. Jika versi cocok, server menaikkan `version`. Jika tidak, server mengembalikan konflik tanpa menimpa data.
 7. Klien memilih “gunakan lokal” atau “gunakan server”.
 
-## Struktur SOLID
-
-- `IWorkbookRepository` dan `ISyncTransport` adalah abstraction boundary.
-- `DexieWorkbookRepository` hanya menangani persistence lokal.
-- `HttpSyncTransport` hanya menangani protokol HTTP.
-- `SyncService` mengorkestrasi use case tanpa bergantung pada Dexie, fetch, atau PostgreSQL.
-- Route API menangani delivery layer; `PostgresAccountRepository` dan `PostgresSyncRepository` menjadi infrastructure adapter server.
-
 ## Menjalankan lokal
 
 Prasyarat: Node.js 20.9+, Docker, dan pnpm 10.
