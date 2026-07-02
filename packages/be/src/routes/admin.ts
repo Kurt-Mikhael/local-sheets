@@ -61,6 +61,35 @@ adminRouter.post('/workbooks', asyncHandler(async (req, res) => {
   res.status(201).json({ workbookId, ownerId, title, createdBy: user.id })
 }))
 
+const importWorkbookSchema = z.object({
+  title: z.string().trim().min(1).max(120),
+  snapshot: z.record(z.string(), z.unknown()),
+})
+
+adminRouter.post('/workbooks/import', asyncHandler(async (req, res) => {
+  assertMutationRequest(req)
+  const user = await getCurrentUser(req)
+  ensureAdmin(user)
+
+  const rate = workbookAdminRateLimiter.consume(`wb-import:${user.id}`)
+  if (!rate.allowed) {
+    res.status(429).set('Retry-After', String(rate.retryAfterSeconds)).json({ error: 'Terlalu banyak percobaan. Coba lagi nanti.' })
+    return
+  }
+
+  const parsed = importWorkbookSchema.safeParse(req.body ?? {})
+  if (!parsed.success) throw new HttpError(400, 'Payload tidak valid.')
+
+  const workbookId = randomUUID()
+  const ownerId = user.id
+  const title = parsed.data.title
+  const snapshot = parsed.data.snapshot as Record<string, unknown>
+
+  await accountRepository.createWorkbookWithSnapshot(ownerId, workbookId, title, snapshot)
+
+  res.status(201).json({ workbookId, ownerId, title, createdBy: user.id })
+}))
+
 adminRouter.delete('/workbooks/:workbookId', asyncHandler(async (req, res) => {
   assertMutationRequest(req)
   const user = await getCurrentUser(req)
@@ -157,4 +186,104 @@ adminRouter.post('/users', asyncHandler(async (req, res) => {
 
   const created = await accountRepository.createUser(parsed.data.email, passwordHash, 'user')
   res.status(201).json({ user: { id: created.id, email: created.email, role: created.role } })
+}))
+
+// ponytail: workbook version history endpoints
+const MAX_VERSIONS_PER_WORKBOOK = 39
+
+adminRouter.post('/workbooks/:workbookId/versions', asyncHandler(async (req, res) => {
+  assertMutationRequest(req)
+  const user = await getCurrentUser(req)
+  ensureAdmin(user)
+
+  const workbookId = param(req, 'workbookId')
+  const label = String((req.body as { label?: unknown } | undefined)?.label ?? '').trim()
+  if (!label) throw new HttpError(400, 'Label wajib diisi.')
+  if (label.length > 120) throw new HttpError(400, 'Label maksimal 120 karakter.')
+
+  const owner = await accountRepository.findWorkbookOwner(workbookId)
+  if (!owner) throw new HttpError(404, 'Workbook tidak ditemukan.')
+
+  const data = await accountRepository.findWorkbookData(owner.ownerId, workbookId)
+  if (!data) throw new HttpError(404, 'Workbook belum memiliki snapshot untuk disimpan.')
+
+  const created = await accountRepository.createWorkbookVersion(workbookId, label, data.snapshot, user.id)
+  await accountRepository.pruneOldVersions(workbookId, MAX_VERSIONS_PER_WORKBOOK)
+  res.status(201).json({ version: { id: created.id, label, createdAt: created.createdAt } })
+}))
+
+adminRouter.get('/workbooks/:workbookId/versions', asyncHandler(async (req, res) => {
+  const user = await getCurrentUser(req)
+  ensureAdmin(user)
+
+  const workbookId = param(req, 'workbookId')
+  const versions = await accountRepository.listWorkbookVersions(workbookId)
+  res.json({ versions })
+}))
+
+adminRouter.get('/workbooks/:workbookId/versions/:versionId', asyncHandler(async (req, res) => {
+  const user = await getCurrentUser(req)
+  ensureAdmin(user)
+
+  const versionId = param(req, 'versionId')
+  const v = await accountRepository.getWorkbookVersion(versionId)
+  if (!v) throw new HttpError(404, 'Versi tidak ditemukan.')
+  res.json({ version: v })
+}))
+
+adminRouter.post('/workbooks/:workbookId/versions/:versionId/restore', asyncHandler(async (req, res) => {
+  assertMutationRequest(req)
+  const user = await getCurrentUser(req)
+  ensureAdmin(user)
+
+  const workbookId = param(req, 'workbookId')
+  const versionId = param(req, 'versionId')
+
+  const owner = await accountRepository.findWorkbookOwner(workbookId)
+  if (!owner) throw new HttpError(404, 'Workbook tidak ditemukan.')
+
+  const version = await accountRepository.getWorkbookVersion(versionId)
+  if (!version) throw new HttpError(404, 'Versi tidak ditemukan.')
+  if (version.workbookId !== workbookId) throw new HttpError(400, 'Versi bukan untuk workbook ini.')
+
+  const current = await accountRepository.findWorkbookData(owner.ownerId, workbookId)
+  if (current) {
+    await accountRepository.createWorkbookVersion(
+      workbookId,
+      `Auto: sebelum restore ke "${version.label}"`,
+      current.snapshot,
+      user.id,
+    )
+  }
+
+  // ponytail: restore = apply version snapshot to workbooks, clear yjs binary to force re-init
+  const { query } = await import('../lib/postgres.js')
+  await query(
+    `UPDATE workbooks
+     SET snapshot = $3::jsonb, version = version + 1, updated_at = NOW()
+     WHERE user_id = $1 AND id = $2`,
+    [owner.ownerId, workbookId, JSON.stringify(version.snapshot)],
+  )
+  await query(
+    `UPDATE workbook_snapshots SET doc = ''::bytea, updated_at = NOW() WHERE user_id = $1 AND workbook_id = $2`,
+    [owner.ownerId, workbookId],
+  )
+  await accountRepository.pruneOldVersions(workbookId, MAX_VERSIONS_PER_WORKBOOK)
+
+  // ponytail: signal collab room to disconnect all clients so they re-sync from new state
+  const { forceReconnectWorkbook } = await import('./collab.js')
+  forceReconnectWorkbook(owner.ownerId, workbookId)
+
+  res.json({ ok: true, versionId })
+}))
+
+adminRouter.delete('/workbooks/:workbookId/versions/:versionId', asyncHandler(async (req, res) => {
+  assertMutationRequest(req)
+  const user = await getCurrentUser(req)
+  ensureAdmin(user)
+
+  const versionId = param(req, 'versionId')
+  const ok = await accountRepository.deleteWorkbookVersion(versionId)
+  if (!ok) throw new HttpError(404, 'Versi tidak ditemukan.')
+  res.json({ ok: true })
 }))
