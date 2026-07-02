@@ -245,3 +245,26 @@ export function handleCollabUpgrade(req: IncomingMessage, socket: Duplex, head: 
     })
   })()
 }
+
+// ponytail: force every active client in the workbook's collab room to disconnect and re-sync.
+// used after a version restore so stale Yjs state doesn't diverge from the new JSON snapshot.
+export function forceReconnectWorkbook(ownerId: string, workbookId: string): void {
+  const roomName = `${ownerId}:${workbookId}`
+  const room = rooms.get(roomName)
+  if (!room) return
+  for (const conn of room.conns.keys()) {
+    try {
+      conn.close(1012, 'Workbook restored; please reconnect.')
+    } catch {
+      // ponytail: best-effort close, ignore failures
+    }
+  }
+  room.conns.clear()
+  if (room.doc.store.clients.size > 0) {
+    room.doc.destroy()
+  }
+  rooms.delete(roomName)
+  void saveRoomToDb(roomName, room).catch((err) => {
+    console.error('[ws] save after forceReconnect failed', err)
+  })
+}
