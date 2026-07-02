@@ -312,10 +312,20 @@ export default function AppShell() {
     if (!workbooks || !account) return
     const target = new URLSearchParams(location.search).get('workbook')
     if (!target) return
-    if (workbooks.some((wb) => wb.id === target)) {
-      setActiveId(target)
-    }
+      if (workbooks.some((wb) => wb.id === target)) {
+        void handleSwitchWorkbook(target)
+      }
   }, [workbooks, location.search, account])
+
+  const handleSwitchWorkbook = useCallback(
+    async (workbookId: string) => {
+      if (univerHandleRef.current && univerHandleRef.current.workbookId !== workbookId) {
+        await univerHandleRef.current.forceSave()
+      }
+      setActiveId(workbookId)
+    },
+    [],
+  )
 
   const handlePersistSnapshot = useCallback((workbookId: string, snapshot: WorkbookSnapshot) => {
     void workbookRepository.saveSnapshot(workbookId, snapshot)
@@ -375,7 +385,7 @@ export default function AppShell() {
     if (!active || !window.confirm(`Hapus "${active.title}"?`)) return
     await workbookRepository.markDeleted(active.id)
     const next = visibleWorkbooks.find((item) => item.id !== active.id)
-    setActiveId(next?.id)
+    void handleSwitchWorkbook(next?.id ?? '')
     if (navigator.onLine) void syncNow()
   }
 
@@ -489,7 +499,7 @@ export default function AppShell() {
                 key={workbook.id}
                 data-workbook-id={workbook.id}
                 className={`workbook-item ${active?.id === workbook.id ? 'active' : ''}`}
-                onClick={() => setActiveId(workbook.id)}
+                onClick={() => void handleSwitchWorkbook(workbook.id)}
               >
                 <span>{workbook.title}</span>
                 <small>{workbook.syncState}</small>
