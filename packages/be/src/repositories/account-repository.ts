@@ -173,6 +173,31 @@ export class PostgresAccountRepository {
     )
   }
 
+  // ponytail: same as createEmptySnapshot but with a real snapshot (used by Excel import)
+  async createWorkbookWithSnapshot(
+    userId: string,
+    workbookId: string,
+    title: string,
+    snapshot: Record<string, unknown>,
+  ): Promise<void> {
+    await query(
+      `INSERT INTO workbook_snapshots (user_id, workbook_id, doc, version, title, updated_at)
+       VALUES ($1, $2, '', 1, $3, NOW())
+       ON CONFLICT (user_id, workbook_id) DO NOTHING`,
+      [userId, workbookId, title],
+    )
+    await query(
+      `INSERT INTO workbooks (user_id, id, title, snapshot, version, updated_at)
+       VALUES ($1, $2, $3, $4::jsonb, 1, NOW())
+       ON CONFLICT (user_id, id) DO UPDATE SET
+         title = EXCLUDED.title,
+         snapshot = EXCLUDED.snapshot,
+         version = EXCLUDED.version,
+         updated_at = NOW()`,
+      [userId, workbookId, title, JSON.stringify(snapshot)],
+    )
+  }
+
   async grantWorkbookAccess(workbookId: string, userId: string, grantedBy: string): Promise<void> {
     await query(
       `INSERT INTO workbook_access (workbook_id, user_id, granted_by)
@@ -260,6 +285,89 @@ export class PostgresAccountRepository {
       'SELECT id, email, role FROM users ORDER BY created_at ASC',
     )
     return result.rows
+  }
+
+  // ponytail: workbook version history — admin can save labeled snapshots and restore them later.
+  // app-level cascade: when a workbook is deleted, also call deleteVersionsForWorkbook in the same transaction.
+  async createWorkbookVersion(
+    workbookId: string,
+    label: string,
+    snapshot: Record<string, unknown>,
+    createdBy: string,
+  ): Promise<{ id: string; createdAt: string }> {
+    const result = await query<{ id: string; created_at: Date }>(
+      `INSERT INTO workbook_versions (workbook_id, version_label, snapshot, created_by)
+       VALUES ($1, $2, $3::jsonb, $4)
+       RETURNING id, created_at`,
+      [workbookId, label, JSON.stringify(snapshot), createdBy],
+    )
+    const row = result.rows[0]
+    return { id: row.id, createdAt: row.created_at.toISOString() }
+  }
+
+  async listWorkbookVersions(
+    workbookId: string,
+  ): Promise<Array<{ id: string; label: string; createdAt: string; createdBy: string | null; snapshotSize: number }>> {
+    const result = await query<{ id: string; label: string; created_at: Date; created_by: string | null; snapshot: Record<string, unknown> }>(
+      `SELECT id, version_label, created_at, created_by, snapshot
+       FROM workbook_versions
+       WHERE workbook_id = $1
+       ORDER BY created_at DESC`,
+      [workbookId],
+    )
+    return result.rows.map((r) => ({
+      id: r.id,
+      label: r.label,
+      createdAt: r.created_at.toISOString(),
+      createdBy: r.created_by,
+      snapshotSize: JSON.stringify(r.snapshot).length,
+    }))
+  }
+
+  async getWorkbookVersion(
+    versionId: string,
+  ): Promise<{ id: string; workbookId: string; label: string; snapshot: Record<string, unknown>; createdAt: string; createdBy: string | null } | null> {
+    const result = await query<{ id: string; workbook_id: string; label: string; snapshot: Record<string, unknown>; created_at: Date; created_by: string | null }>(
+      `SELECT id, workbook_id, version_label, snapshot, created_at, created_by
+       FROM workbook_versions
+       WHERE id = $1
+       LIMIT 1`,
+      [versionId],
+    )
+    const row = result.rows[0]
+    if (!row) return null
+    return {
+      id: row.id,
+      workbookId: row.workbook_id,
+      label: row.label,
+      snapshot: row.snapshot,
+      createdAt: row.created_at.toISOString(),
+      createdBy: row.created_by,
+    }
+  }
+
+  async deleteWorkbookVersion(versionId: string): Promise<boolean> {
+    const result = await query('DELETE FROM workbook_versions WHERE id = $1', [versionId])
+    return result.rowCount !== null && result.rowCount > 0
+  }
+
+  async deleteVersionsForWorkbook(workbookId: string): Promise<void> {
+    await query('DELETE FROM workbook_versions WHERE workbook_id = $1', [workbookId])
+  }
+
+  async pruneOldVersions(workbookId: string, keepCount: number): Promise<void> {
+    // ponytail: keep the most recent N versions; admin-labeled ones survive by being newer typically
+    await query(
+      `DELETE FROM workbook_versions
+       WHERE workbook_id = $1
+         AND id NOT IN (
+           SELECT id FROM workbook_versions
+           WHERE workbook_id = $1
+           ORDER BY created_at DESC
+           LIMIT $2
+         )`,
+      [workbookId, keepCount],
+    )
   }
 }
 
