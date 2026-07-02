@@ -15,7 +15,7 @@ import '@univerjs/presets/lib/styles/preset-sheets-conditional-formatting.css'
 
 export interface UniverAPIHandle {
   getSnapshot: () => WorkbookSnapshot | null
-  forceSave: () => void
+  forceSave: () => Promise<void>
 }
 
 interface SpreadsheetEditorProps {
