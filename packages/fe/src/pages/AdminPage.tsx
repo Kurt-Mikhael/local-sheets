@@ -1,18 +1,25 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   createAdminUser,
   createAdminWorkbook,
+  createWorkbookVersion,
   deleteAdminWorkbook,
+  deleteWorkbookVersion,
+  importAdminWorkbook,
   listAdminUsers,
   listAdminWorkbooks,
   listWorkbookAccess,
+  listWorkbookVersions,
+  restoreWorkbookVersion,
   revokeWorkbook,
   shareWorkbook,
   type AdminUser,
   type AdminWorkbook,
   type WorkbookAccess,
+  type WorkbookVersion,
 } from '@/lib/client/admin-api'
+import { importExcelFile } from '@/lib/client/excel-import'
 import type { Account } from '@/lib/client/account-cache'
 
 type Tab = 'workbooks' | 'users'
@@ -158,6 +165,7 @@ interface WorkbookPanelProps {
 function WorkbookPanel({ workbooks, users, busy, setBusy, setError, onChanged, navigate }: WorkbookPanelProps) {
   const [newTitle, setNewTitle] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const importInputRef = useRef<HTMLInputElement | null>(null)
 
   async function handleCreate() {
     setError('')
@@ -169,6 +177,21 @@ function WorkbookPanel({ workbooks, users, busy, setBusy, setError, onChanged, n
       setSelectedId(result.workbookId)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Gagal membuat workbook')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleImportFile(file: File) {
+    setError('')
+    setBusy(true)
+    try {
+      const imported = await importExcelFile(file)
+      const result = await importAdminWorkbook({ title: imported.title, snapshot: imported.snapshot })
+      await onChanged()
+      setSelectedId(result.workbookId)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Gagal mengimpor file Excel')
     } finally {
       setBusy(false)
     }
@@ -210,6 +233,28 @@ function WorkbookPanel({ workbooks, users, busy, setBusy, setError, onChanged, n
             Buat
           </button>
         </div>
+        <div className="form-row">
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            disabled={busy}
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) void handleImportFile(file)
+              e.target.value = ''
+            }}
+          />
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={busy}
+            onClick={() => importInputRef.current?.click()}
+          >
+            Import Excel (.xlsx)
+          </button>
+        </div>
       </div>
 
       <div className="admin-card">
@@ -244,6 +289,9 @@ function WorkbookPanel({ workbooks, users, busy, setBusy, setError, onChanged, n
                 </div>
                 {selectedId === wb.id && (
                   <AccessPanel workbookId={wb.id} users={users} setError={setError} onChanged={onChanged} />
+                )}
+                {selectedId === wb.id && (
+                  <VersionPanel workbookId={wb.id} setError={setError} onChanged={onChanged} />
                 )}
               </li>
             ))}
@@ -438,5 +486,134 @@ function UserPanel({ users, busy, setBusy, setError, onChanged }: UserPanelProps
         )}
       </div>
     </section>
+  )
+}
+
+interface VersionPanelProps {
+  workbookId: string
+  setError: (msg: string) => void
+  onChanged: () => Promise<void>
+}
+
+function VersionPanel({ workbookId, setError, onChanged }: VersionPanelProps) {
+  const [versions, setVersions] = useState<WorkbookVersion[]>([])
+  const [label, setLabel] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [loaded, setLoaded] = useState(false)
+
+  const refresh = useCallback(async () => {
+    try {
+      const list = await listWorkbookVersions(workbookId)
+      setVersions(list)
+      setLoaded(true)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Gagal memuat versi')
+    }
+  }, [workbookId, setError])
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  async function handleCreate() {
+    const trimmed = label.trim()
+    if (!trimmed) return
+    setBusy(true)
+    setError('')
+    try {
+      await createWorkbookVersion(workbookId, trimmed)
+      setLabel('')
+      await refresh()
+      await onChanged()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Gagal membuat versi')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleRestore(versionId: string, versionLabel: string) {
+    if (!window.confirm(`Restore ke versi "${versionLabel}"? Versi saat ini akan otomatis disalin sebagai backup.`)) return
+    setBusy(true)
+    setError('')
+    try {
+      await restoreWorkbookVersion(workbookId, versionId)
+      await refresh()
+      await onChanged()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Gagal melakukan restore')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleDelete(versionId: string) {
+    if (!window.confirm('Hapus versi ini? Tindakan tidak dapat dibatalkan.')) return
+    setBusy(true)
+    setError('')
+    try {
+      await deleteWorkbookVersion(workbookId, versionId)
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Gagal menghapus versi')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="version-panel">
+      <h3>Riwayat versi</h3>
+      <div className="form-row">
+        <input
+          type="text"
+          placeholder="Label versi (misal: v1.0 - sebelum migrasi)"
+          value={label}
+          maxLength={120}
+          onChange={(e) => setLabel(e.target.value)}
+          disabled={busy}
+        />
+        <button
+          type="button"
+          className="primary-button"
+          onClick={() => void handleCreate()}
+          disabled={busy || !label.trim()}
+        >
+          + Simpan sebagai versi
+        </button>
+      </div>
+      {!loaded ? (
+        <p className="muted">Memuat…</p>
+      ) : versions.length === 0 ? (
+        <p className="muted">Belum ada versi yang disimpan.</p>
+      ) : (
+        <ul className="admin-list">
+          {versions.map((v) => (
+            <li key={v.id} className="admin-list-item simple">
+              <div className="version-info">
+                <strong>{v.label}</strong>
+                <span className="muted">
+                  {' · '}
+                  {new Date(v.createdAt).toLocaleString('id-ID')} · {(v.snapshotSize / 1024).toFixed(1)} KB
+                </span>
+              </div>
+              <div className="admin-list-actions">
+                <button type="button" onClick={() => void handleRestore(v.id, v.label)} disabled={busy}>
+                  Restore
+                </button>
+                <button
+                  type="button"
+                  className="danger-button"
+                  onClick={() => void handleDelete(v.id)}
+                  disabled={busy}
+                >
+                  Hapus
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }
