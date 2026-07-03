@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+.git
+.next
+.vercel
+dist
+**/dist
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.pnpm-store

@@ -1,17 +1,142 @@
-# Deployment Localsheet
+# Deploy LocalSheet ke Server Sendiri
 
-## Requirements
+Dua pilihan cara deploy:
 
-VPS Linux (Ubuntu 22.04+ / Debian 12+)
+- **Cara A — Docker (disarankan)**: Postgres + app + Nginx dalam container. Lebih portable & konsisten.
+- **Cara B — Manual (tanpa Docker)**: Install Postgres, Node, pnpm, Nginx langsung di server.
 
-- Domain yang sudah diarahkan ke IP VPS (lewat Cloudflare atau DNS provider)
+---
+
+## Yang Dibutuhkan (kedua cara)
+
+- VPS Linux (Ubuntu 22.04+ / Debian 12+) — minimum 1 CPU, 1 GB RAM
+- Domain yang sudah diarahkan ke IP VPS (atau langsung pakai IP)
 - Akses root / sudo
 
 ---
 
-## 1. Install Software di Server
+# Cara A — Docker (Disarankan)
 
-Login ke VPS lewat SSH, lalu jalankan:
+Lebih simpel: satu command untuk jalanin semua service.
+
+## A1. Install Docker
+
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y curl git
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER
+newgrp docker
+docker --version
+docker compose version
+```
+
+## A2. Clone & Setup Env
+
+```bash
+sudo mkdir -p /var/www/localsheet
+sudo chown -R $USER:$USER /var/www/localsheet
+cd /var/www/localsheet
+git clone https://github.com/Kurt-Mikhael/local-sheets.git .
+
+# Folder ini sekarang berisi isi repo (package.json, docs/, packages/, dll)
+cp .env.example .env
+nano .env
+```
+
+Isi `.env`:
+
+```env
+POSTGRES_DB=localsheet
+POSTGRES_USER=localsheet
+POSTGRES_PASSWORD=rahasia123
+POSTGRES_PORT=5432
+
+NODE_ENV=production
+APP_ORIGIN=https://sheet.domainkamu.com
+APP_ORIGIN_EXTRA=
+DATABASE_URL=postgresql://localsheet:rahasia123@postgres:5432/localsheet?schema=public
+DB_SSL=false
+TRUST_PROXY=1
+CURSOR_SIGNING_SECRET=GANTI-DENGAN-32-KARAKTER-RANDOM
+SESSION_TTL_DAYS=30
+MAX_SYNC_BODY_BYTES=5242880
+```
+
+`CURSOR_SIGNING_SECRET` random:
+
+```bash
+openssl rand -base64 48
+```
+
+> Catatan: `DATABASE_URL` di container mengarah ke hostname `postgres` (bukan `localhost`), karena Postgres & app berada di container berbeda dalam network `localsheet`.
+
+## A3. Build & Jalanin
+
+```bash
+docker compose up -d --build
+```
+
+Tunggu sampai semua container `healthy` / `running`:
+
+```bash
+docker compose ps
+docker compose logs -f app
+```
+
+Cek log dengan `Ctrl+C` setelah `Server running on http://localhost:4000` muncul.
+
+## A4. Migrasi Database & Seed Admin
+
+```bash
+docker compose exec app sh -c "pnpm db:migrate && pnpm seed:admin"
+```
+
+## A5. HTTPS (Opsional tapi Disarankan)
+
+Masuk ke host (bukan container):
+
+```bash
+sudo apt install -y certbot
+sudo certbot certonly --standalone -d sheet.domainkamu.com
+```
+
+Copy sertifikat ke folder yang di-mount oleh Nginx container:
+
+```bash
+sudo mkdir -p /var/www/localsheet/docker/certs
+sudo cp /etc/letsencrypt/live/sheet.domainkamu.com/fullchain.pem /var/www/localsheet/docker/certs/
+sudo cp /etc/letsencrypt/live/sheet.domainkamu.com/privkey.pem /var/www/localsheet/docker/certs/
+```
+
+Tambah blok `server { listen 443 ssl; ... }` di `docker/nginx.conf` (lihat dokumentasi Nginx ssl).
+
+Restart:
+
+```bash
+docker compose restart nginx
+```
+
+## A6. Firewall
+
+```bash
+sudo ufw allow OpenSSH
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw enable
+```
+
+## A7. Tes
+
+Buka `https://sheet.domainkamu.com` (atau `http://IP-VPS`). Login dengan akun admin.
+
+---
+
+# Cara B — Manual (Tanpa Docker)
+
+Install Postgres, Node, pnpm, Nginx langsung di server, jalankan BE via systemd.
+
+## B1. Install Software
 
 ```bash
 sudo apt update && sudo apt upgrade -y
@@ -33,9 +158,7 @@ node -v    # harus v20.x ke atas
 pnpm -v    # harus 10.x
 ```
 
----
-
-## 2. Setup Database PostgreSQL
+## B2. Setup Database PostgreSQL
 
 ```bash
 sudo -u postgres psql
@@ -50,25 +173,20 @@ GRANT ALL PRIVILEGES ON DATABASE localsheet TO localsheet;
 \q
 ```
 
----
-
-## 3. Clone & Setup Kode
+## B3. Clone & Setup Env
 
 ```bash
 sudo mkdir -p /var/www/localsheet
 sudo chown -R $USER:$USER /var/www/localsheet
 cd /var/www/localsheet
-git clone https://github.com/USERNAME/REPO-KAMU.git .
+git clone https://github.com/Kurt-Mikhael/local-sheets.git .
+
+# Folder ini sekarang berisi isi repo (package.json, docs/, packages/, dll)
 cp .env.example .env
-```
-
-Edit file `.env`:
-
-```bash
 nano .env
 ```
 
-Ubah isinya jadi:
+Isi `.env`:
 
 ```env
 NODE_ENV=production
@@ -82,17 +200,15 @@ SESSION_TTL_DAYS=30
 MAX_SYNC_BODY_BYTES=5242880
 ```
 
-Buat `CURSOR_SIGNING_SECRET` random:
+`CURSOR_SIGNING_SECRET` random:
 
 ```bash
 openssl rand -base64 48
 ```
 
-Copy hasilnya ke `.env`. Simpan file (`Ctrl+O`, `Enter`, `Ctrl+X`).
+> Catatan: `DATABASE_URL` pakai `localhost` karena Postgres & app di server yang sama.
 
----
-
-## 4. Install Dependensi & Build
+## B4. Install Dependensi & Build
 
 ```bash
 cd /var/www/localsheet
@@ -105,34 +221,33 @@ Jalankan migration database (membuat semua tabel):
 pnpm db:migrate
 ```
 
-Buat akun admin pertama (ikuti prompt username & password):
+Buat akun admin pertama:
 
 ```bash
 pnpm seed:admin
 ```
 
-Build Frontend:
+Build Frontend & Backend:
+
+```bash
+pnpm --filter shared build
+pnpm --filter be build
+pnpm --filter fe build
+```
+
+Atau sekaligus (root `pnpm build` udah mencakup ketiganya):
 
 ```bash
 pnpm build
 ```
 
-Build Backend TypeScript:
+Output:
 
-```bash
-cd packages/be && pnpm build && cd ../..
-```
-
-Output build:
-
+- shared: `/var/www/localsheet/packages/shared/dist`
+- BE: `/var/www/localsheet/packages/be/dist/be/src/index.js`
 - FE: `/var/www/localsheet/packages/fe/dist`
-- BE: `/var/www/localsheet/packages/be/dist`
 
----
-
-## 5. Run Backend sebagai Service
-
-Supaya BE otomatis nyala tiap server restart.
+## B5. Jalankan Backend sebagai Service
 
 ```bash
 sudo nano /etc/systemd/system/localsheet-be.service
@@ -149,7 +264,7 @@ After=network.target postgresql.service
 Type=simple
 User=www-data
 WorkingDirectory=/var/www/localsheet/packages/be
-ExecStart=/usr/bin/node --env-file=/var/www/localsheet/.env dist/index.js
+ExecStart=/usr/bin/node --env-file=/var/www/localsheet/.env dist/be/src/index.js
 Restart=always
 RestartSec=5
 Environment=NODE_ENV=production
@@ -173,9 +288,7 @@ Pastikan status `active (running)`. Kalau error, lihat log:
 sudo journalctl -u localsheet-be -n 50
 ```
 
----
-
-## 6. Setup Nginx
+## B6. Setup Nginx (Reverse Proxy)
 
 ```bash
 sudo nano /etc/nginx/sites-available/localsheet
@@ -236,23 +349,19 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
----
-
-## 7. HTTPS Gratis (Let's Encrypt)
+## B7. HTTPS Gratis (Let's Encrypt)
 
 ```bash
 sudo certbot --nginx -d sheet.domainkamu.com
 ```
 
-Ikuti prompt, pilih redirect HTTP ke HTTPS. Sertifikat auto-renew, test dengan:
+Sertifikat auto-renew, test dengan:
 
 ```bash
 sudo certbot renew --dry-run
 ```
 
----
-
-## 8. Firewall
+## B8. Firewall
 
 ```bash
 sudo ufw allow OpenSSH
@@ -261,59 +370,88 @@ sudo ufw enable
 sudo ufw status
 ```
 
+## B9. Tes
+
+Buka `https://sheet.domainkamu.com`. Login dengan akun admin.
+
 ---
 
-## 9. Tes
+# Update Kode (Nanti)
 
-Buka browser, akses `https://sheet.domainkamu.com`. Login dengan akun admin yang dibuat di langkah 4. Kalau muncul halaman login, deploy berhasil.
-
-Cek log kalau ada masalah:
+## Cara A (Docker)
 
 ```bash
-sudo journalctl -u localsheet-be -f
-sudo tail -f /var/log/nginx/error.log
+cd /var/www/localsheet
+git pull
+docker compose up -d --build
+docker compose exec app sh -c "pnpm db:migrate"
 ```
 
----
-
-## Update Kode (Nanti)
+## Cara B (Manual)
 
 ```bash
 cd /var/www/localsheet
 git pull
 pnpm install --frozen-lockfile
-pnpm db:migrate          # kalau ada migration baru
-pnpm build               # FE
-cd packages/be && pnpm build && cd ../..
+pnpm db:migrate
+pnpm build
 sudo systemctl restart localsheet-be
 ```
 
 ---
 
-## Backup Database
-
-Backup:
+# Backup Database
 
 ```bash
+# Cara A
+docker compose exec -T postgres pg_dump -U localsheet localsheet > backup-$(date +%F).sql
+
+# Cara B
 sudo -u postgres pg_dump localsheet > backup-$(date +%F).sql
 ```
 
 Restore:
 
 ```bash
+# Cara A
+cat backup-2026-07-02.sql | docker compose exec -T postgres psql -U localsheet -d localsheet
+
+# Cara B
 sudo -u postgres psql localsheet < backup-2026-07-02.sql
 ```
 
-Simpan file backup di tempat aman (S3, Google Drive, dll).
+---
+
+# Troubleshooting
+
+| Masalah                              | Solusi                                                                                                |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| `pnpm install` gagal di `argon2` | Install`build-essential python3`, lalu `pnpm rebuild argon2`                                      |
+| `502 Bad Gateway`                  | Cara A:`docker compose logs app`. Cara B: `systemctl status localsheet-be`                        |
+| Login loop / "invalid origin"        | `APP_ORIGIN` di `.env` harus sama persis dengan domain (pakai `https://`, tanpa trailing slash) |
+| WebSocket tidak konek                | Pastikan blok`location /ws/` ada di Nginx config                                                    |
+| Database connection error            | Cek`DATABASE_URL`. Cara A: hostname `postgres`. Cara B: hostname `localhost`                    |
+| `tsx: command not found` (Cara B)  | `pnpm install` di folder repo, lalu cek `node_modules/.bin/tsx`                                   |
+| Certbot gagal                        | DNS domain belum propagate. Tunggu 5–30 menit lalu ulangi                                            |
+| Port 4000 bentrok                    | Cek`lsof -i :4000` atau `docker compose ps`                                                       |
 
 ---
 
-## Troubleshooting
+# Catatan Penting
 
-| Masalah                              | Solusi                                                                       |
-| ------------------------------------ | ---------------------------------------------------------------------------- |
-| `pnpm install` gagal di `argon2` | Pastikan`build-essential` & `python3` terinstall (langkah 1)             |
-| `502 Bad Gateway`                  | Cek`systemctl status localsheet-be`                                        |
-| Login gagal                          | Cek`APP_ORIGIN` di `.env` sama persis dengan domain (pakai `https://`) |
-| WebSocket tidak konek                | Pastikan Nginx config blok`/ws/` ada & certbot tidak menghapus             |
-| Database connection error            | Cek`DATABASE_URL` password sama dengan yang dibuat di langkah             |
+- **Cara A lebih direkomendasikan** untuk pemula: konsisten, sekali `docker compose up` jadi.
+- **Backup database rutin**. File `.sql` hasil `pg_dump` aman disimpan offline / cloud.
+- **Update OS berkala**: `sudo apt update && sudo apt upgrade`.
+- **Cek log berkala**:
+  - Cara A: `docker compose logs --since "1 day ago"`
+  - Cara B: `sudo journalctl -u localsheet-be --since "1 day ago"`
+- **Struktur penting di server**:
+  ```
+  /var/www/localsheet/
+  ├── .env
+  ├── docker-compose.yml
+  ├── Dockerfile
+  ├── docker/nginx.conf
+  ├── packages/fe/dist/         # FE static (Cara B)
+  └── ...
+  ```

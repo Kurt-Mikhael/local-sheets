@@ -3,13 +3,15 @@
     "target": "ES2022",
     "module": "esnext",
     "moduleResolution": "bundler",
-    "noEmit": true,
+    "outDir": "dist",
+    "rootDir": "src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "noUncheckedIndexedAccess": true
+    "noUncheckedIndexedAccess": true,
+    "declaration": true
   },
   "include": ["src"]
 }

@@ -10,7 +10,7 @@
     "dev:fe": "pnpm --filter fe dev",
     "dev:be": "pnpm --filter be dev",
     "clean:ports": "powershell -NoProfile -Command \"foreach ($p in 3000,3001,4000) { Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue } }; Get-Process node -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq '' -and $_.StartTime -gt (Get-Date).AddMinutes(-30) } | Stop-Process -Force -ErrorAction SilentlyContinue\"",
-    "build": "pnpm --filter fe build",
+    "build": "pnpm --filter shared build && pnpm --filter be build && pnpm --filter fe build",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
