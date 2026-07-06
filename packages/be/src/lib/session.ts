@@ -7,7 +7,15 @@ function isProduction(): boolean {
   return process.env.NODE_ENV === 'production' || process.env.VERCEL === '1'
 }
 
-const SESSION_COOKIE = isProduction()
+// ponytail: Secure/Host-prefixed cookies require HTTPS; default to insecure when APP_ORIGIN is http
+function isSecureContext(): boolean {
+  if (process.env.COOKIE_SECURE === 'true') return true
+  if (process.env.COOKIE_SECURE === 'false') return false
+  const origin = process.env.APP_ORIGIN ?? ''
+  return origin.startsWith('https://')
+}
+
+const SESSION_COOKIE = isSecureContext()
   ? '__Host-localsheet_session'
   : 'localsheet_session'
 
@@ -35,8 +43,8 @@ export function attachSessionCookie(
 ): void {
   const setCookie = cookie.serialize(SESSION_COOKIE, session.token, {
     httpOnly: true,
-    secure: isProduction(),
-    sameSite: 'strict',
+    secure: isSecureContext(),
+    sameSite: isSecureContext() ? 'strict' : 'lax',
     path: '/',
     expires: session.expiresAt,
   })
@@ -50,8 +58,8 @@ export async function clearSession(req: IncomingMessage, res: ServerResponse): P
 
   const clearCookie = cookie.serialize(SESSION_COOKIE, '', {
     httpOnly: true,
-    secure: isProduction(),
-    sameSite: 'strict',
+    secure: isSecureContext(),
+    sameSite: isSecureContext() ? 'strict' : 'lax',
     path: '/',
     expires: new Date(0),
   })

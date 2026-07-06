@@ -1,3 +1,18 @@
+root@svr-localsheet:/# sudo -u postgres psql
+psql (16.14 (Ubuntu 16.14-0ubuntu0.24.04.1))
+Type "help" for help.
+
+postgres=# sudo -u postgres psql
+postgres-# CREATE USER localsheet WITH PASSWORD 'rahasia123';
+CREATE DATABASE localsheet OWNER localsheet;
+GRANT ALL PRIVILEGES ON DATABASE localsheet TO localsheet;
+\q
+ERROR:  syntax error at or near "sudo"
+LINE 1: sudo -u postgres psql
+        ^
+ERROR:  role "localsheet" does not exist
+ERROR:  database "localsheet" does not exist
+
 # Deploy LocalSheet ke Server Sendiri
 
 Dua pilihan cara deploy:
@@ -294,12 +309,12 @@ sudo journalctl -u localsheet-be -n 50
 sudo nano /etc/nginx/sites-available/localsheet
 ```
 
-Isi (ganti `sheet.domainkamu.com` dengan domain kamu):
+Isi (ganti `sheet.domainkamu.com` dengan domain kamu, atau pakai `_` untuk akses via IP):
 
 ```nginx
 server {
   listen 80;
-  server_name sheet.domainkamu.com;
+  server_name sheet.domainkamu.com _;
 
   root /var/www/localsheet/packages/fe/dist;
   index index.html;
@@ -320,25 +335,23 @@ server {
     add_header Cache-Control "no-cache";
   }
 
-  # Backend API
+  # Backend API + WebSocket (kolaborasi lewat /api/collab)
   location /api/ {
     proxy_pass http://127.0.0.1:4000;
+    proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
-    client_max_body_size 6m;
-  }
-
-  # WebSocket (kolaborasi)
-  location /ws/ {
-    proxy_pass http://127.0.0.1:4000;
-    proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
+    proxy_read_timeout 86400;
+    client_max_body_size 6m;
   }
 }
 ```
+
+> **Catatan**: WebSocket kolab memakai path `/api/collab/...`, jadi `Upgrade`/`Connection` headers HARUS ada di blok `location /api/`. Blok `location /ws/` yang lama (path salah) sudah dihapus.
 
 Aktifkan:
 
@@ -429,7 +442,8 @@ sudo -u postgres psql localsheet < backup-2026-07-02.sql
 | `pnpm install` gagal di `argon2` | Install`build-essential python3`, lalu `pnpm rebuild argon2`                                      |
 | `502 Bad Gateway`                  | Cara A:`docker compose logs app`. Cara B: `systemctl status localsheet-be`                        |
 | Login loop / "invalid origin"        | `APP_ORIGIN` di `.env` harus sama persis dengan domain (pakai `https://`, tanpa trailing slash) |
-| WebSocket tidak konek                | Pastikan blok`location /ws/` ada di Nginx config                                                    |
+| WebSocket tidak konek                | Pastikan `Upgrade`/`Connection "upgrade"` ada di blok `location /api/` Nginx config                  |
+| ServiceWorker gagal register (HTTPS self-signed) | Set `VITE_PWA_PRODUCTION=false` di `.env` saat build, atau pakai cert valid (Let's Encrypt) |
 | Database connection error            | Cek`DATABASE_URL`. Cara A: hostname `postgres`. Cara B: hostname `localhost`                    |
 | `tsx: command not found` (Cara B)  | `pnpm install` di folder repo, lalu cek `node_modules/.bin/tsx`                                   |
 | Certbot gagal                        | DNS domain belum propagate. Tunggu 5–30 menit lalu ulangi                                            |
