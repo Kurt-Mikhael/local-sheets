@@ -252,6 +252,27 @@ export class PostgresAccountRepository {
     }))
   }
 
+  async listAllWorkbooksForAdmin(): Promise<Array<{ id: string; title: string; ownerEmail: string; ownerRole: string }>> {
+    const result = await query<{ workbook_id: string; title: string; email: string; role: string }>(
+      `SELECT DISTINCT ON (s.workbook_id)
+              s.workbook_id,
+              COALESCE(NULLIF(w.title, ''), s.title) AS title,
+              u.email,
+              u.role
+       FROM workbook_snapshots s
+       INNER JOIN users u ON u.id = s.user_id
+       LEFT JOIN workbooks w ON w.user_id = s.user_id AND w.id = s.workbook_id
+       WHERE w.deleted_at IS NULL
+       ORDER BY s.workbook_id, s.updated_at DESC`,
+    )
+    return result.rows.map((r) => ({
+      id: r.workbook_id,
+      title: r.title,
+      ownerEmail: r.email,
+      ownerRole: r.role,
+    }))
+  }
+
   async listSharedWorkbookIds(userId: string): Promise<string[]> {
     const result = await query<{ workbook_id: string }>(
       'SELECT workbook_id FROM workbook_access WHERE user_id = $1 ORDER BY granted_at DESC',

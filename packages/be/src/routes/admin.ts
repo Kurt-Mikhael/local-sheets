@@ -160,7 +160,7 @@ adminRouter.get('/users', asyncHandler(async (req, res) => {
 adminRouter.get('/workbooks', asyncHandler(async (req, res) => {
   const user = await getCurrentUser(req)
   ensureAdmin(user)
-  res.json({ workbooks: await accountRepository.listWorkbooksByOwner(user.id) })
+  res.json({ workbooks: await accountRepository.listAllWorkbooksForAdmin() })
 }))
 
 adminRouter.post('/users', asyncHandler(async (req, res) => {

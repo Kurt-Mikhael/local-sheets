@@ -32,9 +32,10 @@ const AuthForm = ({ mode }: AuthFormProps) => {
       })
       const result = await response.json().catch(() => ({})) as { error?: string }
       if (!response.ok) {
-        // ponytail: Vite proxy-down returns 500 with empty body; 502/503/504 only appear behind a real reverse proxy
+        // ponytail: empty body means proxy/network failure (Vite down, tunnel dropped);
+        // always fall through to a generic message so the user is not told to run pnpm dev in prod
         if (response.status >= 500 && !result.error) {
-          setError('Backend lokal tidak merespons. Pastikan `pnpm dev` (FE + BE) berjalan.')
+          setError('Server tidak dapat dijangkau. Coba lagi beberapa saat.')
           return
         }
         setError(result.error ?? 'Autentikasi gagal.')

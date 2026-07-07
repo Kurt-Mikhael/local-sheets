@@ -10,6 +10,15 @@ import { workbooksRouter } from './routes/workbooks.js'
 import { handleCollabUpgrade } from './routes/collab.js'
 import { globalRateLimiter } from './lib/rate-limit.js'
 
+// ponytail: keep the process alive on background-task failures (WS load/save, collab timer, etc.)
+// so a transient DB blip doesn't take the whole API down until `pnpm dev` is restarted.
+process.on('unhandledRejection', (reason) => {
+  console.error('[be] unhandledRejection:', reason)
+})
+process.on('uncaughtException', (err) => {
+  console.error('[be] uncaughtException:', err)
+})
+
 export const app = express()
 const PORT = Number(process.env.PORT ?? 4000)
 

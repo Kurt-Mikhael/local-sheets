@@ -20,7 +20,7 @@ import {
   type WorkbookVersion,
 } from '@/lib/client/admin-api'
 import { importExcelFile } from '@/lib/client/excel-import'
-import type { Account } from '@/lib/client/account-cache'
+import { readCachedAccount, type Account } from '@/lib/client/account-cache'
 
 type Tab = 'workbooks' | 'users'
 
@@ -36,15 +36,23 @@ export default function AdminPage() {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
+    const cached = readCachedAccount()
+    if (cached) setAccount(cached)
+
     let cancelled = false
     void (async () => {
       try {
         const res = await fetch('/api/me', { cache: 'no-store', credentials: 'same-origin' })
-        if (!res.ok) return
-        const payload = (await res.json()) as { user: Account }
-        if (!cancelled) setAccount(payload.user)
+        if (cancelled) return
+        if (res.ok) {
+          const payload = (await res.json()) as { user: Account }
+          setAccount(payload.user)
+        } else if (!cached) {
+          setAccount(null)
+        }
       } catch {
-        // offline; account stays null and we show the access-denied screen
+        // ponytail: keep cached account on network failure so a transient Vite proxy
+        // hiccup doesn't kick the user out of an admin page they legitimately have access to
       } finally {
         if (!cancelled) setAccountReady(true)
       }

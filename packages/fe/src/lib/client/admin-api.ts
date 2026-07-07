@@ -30,8 +30,8 @@ async function adminFetch<T>(path: string, init: AdminInit = {}): Promise<T> {
     body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
   })
   if (!res.ok) {
-    const err = (await res.json().catch(() => ({ error: 'Request gagal' }))) as { error?: string }
-    throw new Error(err.error ?? `HTTP ${res.status}`)
+    const err = (await res.json().catch(() => null)) as { error?: string } | null
+    throw new Error(err?.error ?? `Request gagal (HTTP ${res.status})`)
   }
   return (await res.json()) as T
 }

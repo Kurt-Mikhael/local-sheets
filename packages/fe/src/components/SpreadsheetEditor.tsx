@@ -69,6 +69,7 @@ export default function SpreadsheetEditor({
 
     let unitId: string | null = null
     let collabCells: Y.Map<Y.Map<unknown>> | null = null
+    let collabAwareness: import('y-protocols/awareness').Awareness | null = null
 
     const createWorkbook = (snapshot: WorkbookSnapshot) => {
       try {
@@ -85,8 +86,8 @@ export default function SpreadsheetEditor({
             const trySave = () => {
               if (disposed) { resolve(); return }
               const sinceCommand = Date.now() - lastCommandAt
-              if (sinceCommand < 150) {
-                setTimeout(trySave, 50)
+              if (sinceCommand < 400) {
+                setTimeout(trySave, 150)
                 return
               }
               const w = univerAPI.getActiveWorkbook()
@@ -108,6 +109,7 @@ export default function SpreadsheetEditor({
       try {
         const handle = await joinWorkbook(workbookId, { id: account.id, email: account.email, color: '' })
         collabCells = handle.cells
+        collabAwareness = handle.websocket?.awareness ?? null
         const observer = (events: Array<Y.YEvent<Y.AbstractType<unknown>>>, tx: Y.Transaction) => {
           if (disposed || tx.origin === 'local') return
           const wb = univerAPI.getActiveWorkbook()
@@ -171,7 +173,10 @@ export default function SpreadsheetEditor({
       const activeWorkbook = univerAPI.getActiveWorkbook()
       if (!activeWorkbook) return
       const snapshot = activeWorkbook.save() as unknown as WorkbookSnapshot
-      if (collabCells) syncCellsToYjs(snapshot, collabCells)
+      // ponytail: only push to Yjs when someone else is in the room; solo edits skip the full
+      // cell scan + style JSON.stringify compare that otherwise blocks the main thread on every debounce tick
+      const peers = collabAwareness ? collabAwareness.getStates().size - 1 : 0
+      if (collabCells && peers > 0) syncCellsToYjs(snapshot, collabCells)
       onPersistSnapshotRef.current(workbookId, snapshot)
     }
 
@@ -179,7 +184,13 @@ export default function SpreadsheetEditor({
     const disposable = univerAPI.onCommandExecuted(() => {
       lastCommandAt = Date.now()
       if (saveTimer) clearTimeout(saveTimer)
-      saveTimer = setTimeout(persistNow, 300)
+      const schedule = (cb: () => void) => {
+        // ponytail: defer local IDB write into idle time so the editor stays responsive mid-typing
+        const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number }).requestIdleCallback
+        if (typeof ric === 'function') ric(cb, { timeout: 2000 })
+        else setTimeout(cb, 0)
+      }
+      saveTimer = window.setTimeout(() => schedule(persistNow), 1500)
     })
     cleanupFns.push(() => disposable.dispose())
 

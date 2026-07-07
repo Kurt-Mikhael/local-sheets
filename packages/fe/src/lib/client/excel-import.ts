@@ -58,16 +58,17 @@ const INDEXED_RGB: Record<number, string> = {
   81: '#d9d9d9', 82: '#bfbfbf', 83: '#a6a6a6', 84: '#808080',
 }
 
-function toHexRgb(color: { rgb?: string; theme?: number; indexed?: number; auto?: number; tint?: number } | undefined): string | undefined {
+function toHexRgb(color: { rgb?: string; theme?: number; indexed?: number; auto?: number; tint?: number } | undefined, themeColors: Record<number, string> = {}): string | undefined {
   if (!color) return undefined
+  if (color.auto) return undefined
   if (color.rgb) {
     const raw = color.rgb.length === 8 ? color.rgb.slice(2) : color.rgb
     if (!raw) return undefined
     return raw.startsWith('#') ? raw.toLowerCase() : `#${raw.toLowerCase()}`
   }
   if (color.theme !== undefined) {
-    const base = THEME_RGB_FALLBACK[color.theme]
-    if (!base) return '#000000'
+    const base = themeColors[color.theme] ?? THEME_RGB_FALLBACK[color.theme]
+    if (!base) return undefined
     const num = parseInt(base.slice(1), 16)
     const tint = color.tint ?? 0
     const blend = (c: number) => {
@@ -78,9 +79,6 @@ function toHexRgb(color: { rgb?: string; theme?: number; indexed?: number; auto?
     const g = blend((num >> 8) & 0xFF)
     const b = blend(num & 0xFF)
     return `#${[r, g, b].map(x => Math.max(0, Math.min(255, x)).toString(16).padStart(2, '0')).join('')}`
-  }
-  if (color.indexed !== undefined) {
-    return INDEXED_RGB[color.indexed] ?? '#000000'
   }
   return undefined
 }
@@ -187,12 +185,42 @@ function mergeRanges(base: XLSX.Range | undefined, extra: XLSX.Range | undefined
   return out
 }
 
+async function loadThemeColors(zip: JSZip): Promise<Record<number, string>> {
+  const xml = await zip.file('xl/theme/theme1.xml')?.async('string')
+  if (!xml) return {}
+  const slot = (name: string) => {
+    const m = xml.match(new RegExp(`<a:${name}>[\\s\\S]*?</a:${name}>`))
+    if (!m) return undefined
+    const rgbM = m[0].match(/<a:srgbClr val="([A-Fa-f0-9]+)"/)
+    if (rgbM) return '#' + rgbM[1].toLowerCase()
+    const lastM = m[0].match(/<a:sysClr[^>]*lastClr="([A-Fa-f0-9]+)"/)
+    if (lastM) return '#' + lastM[1].toLowerCase()
+    return undefined
+  }
+  const map: Record<number, string> = {}
+  const v = (idx: number, ...names: string[]) => {
+    for (const n of names) {
+      const c = slot(n)
+      if (c) { map[idx] = c; return }
+    }
+  }
+  v(0, 'lt1', 'bg1')
+  v(1, 'dk1', 'tx1')
+  v(2, 'lt2', 'bg2')
+  v(3, 'dk2', 'tx2')
+  for (let i = 1; i <= 8; i++) v(3 + i, 'accent' + i)
+  v(12, 'hlink')
+  v(13, 'folHlink')
+  return map
+}
+
 async function parseStylesXlsx(buffer: ArrayBuffer): Promise<{
   fonts: Array<{ sz?: number; name?: string; bold?: boolean; italic?: boolean; color?: { rgb?: string; theme?: number; indexed?: number; tint?: number } }>
   fills: Array<{ patternType?: string; fgColor?: { rgb?: string; theme?: number; indexed?: number; tint?: number } }>
   borders: Array<{ top?: RawBorderStyle; right?: RawBorderStyle; bottom?: RawBorderStyle; left?: RawBorderStyle }>
   cellXfs: RawXf[]
   numFmts: Record<string, string>
+  themeColors: Record<number, string>
 }> {
   const fonts: any[] = []
   const fills: any[] = []
@@ -205,7 +233,7 @@ async function parseStylesXlsx(buffer: ArrayBuffer): Promise<{
   const zip = new JSZip()
   const loadedZip = await zip.loadAsync(buffer)
   const stylesXml = await loadedZip.file('xl/styles.xml')?.async('string')
-  if (!stylesXml) return { fonts, fills, borders, cellXfs, numFmts }
+  if (!stylesXml) return { fonts, fills, borders, cellXfs, numFmts, themeColors: await loadThemeColors(loadedZip) }
 
   const numFmtRe = /<numFmt\b([^>]*)\/>/g
   let m: RegExpExecArray | null
@@ -322,7 +350,7 @@ async function parseStylesXlsx(buffer: ArrayBuffer): Promise<{
     cellXfs.push(xf)
   }
 
-  return { fonts, fills, borders, cellXfs, numFmts }
+  return { fonts, fills, borders, cellXfs, numFmts, themeColors: await loadThemeColors(loadedZip) }
 }
 
 function normalizeWorksheetPath(target: string): string {
@@ -399,6 +427,7 @@ function buildUniverStyle(
   fills: any[],
   borders: any[],
   numFmts: Record<string, string>,
+  themeColors: Record<number, string> = {},
 ): UniverStyle | undefined {
   const xf = cellXfs[xfIdx]
   if (!xf) return undefined
@@ -411,7 +440,7 @@ function buildUniverStyle(
     if (font.sz) style.fs = font.sz
     if (font.name) style.ff = font.name
     if (font.color) {
-      const c = toHexRgb(font.color)
+      const c = toHexRgb(font.color, themeColors)
       if (c) style.cl = { rgb: c }
     }
   }
@@ -420,7 +449,7 @@ function buildUniverStyle(
   if (fillId > 0 && fillId < fills.length && (xf.applyFill === '1' || xf.applyFill === undefined)) {
     const fill = fills[fillId]
     if (fill.fgColor) {
-      const c = toHexRgb(fill.fgColor)
+      const c = toHexRgb(fill.fgColor, themeColors)
       if (c) style.bg = { rgb: c }
     }
   }
@@ -434,8 +463,8 @@ function buildUniverStyle(
       if (bs?.style) {
         const s = BORDER_STYLE_MAP[bs.style]
         if (s !== undefined) {
-          const c = toHexRgb(bs.color)
-          bd[side] = { s, cl: { rgb: c ?? '#000000' } }
+          const c = toHexRgb(bs.color, themeColors)
+          bd[side] = { s, cl: c ? { rgb: c } : {} }
         }
       }
     }
@@ -465,11 +494,11 @@ function buildUniverStyle(
 export async function importExcelFile(file: File, titleHint?: string): Promise<ImportedWorkbook> {
   const buffer = await file.arrayBuffer()
   const workbook = XLSX.read(buffer, { type: 'array', cellStyles: true, cellFormula: true, cellNF: true })
-  const { fonts, fills, borders, cellXfs, numFmts } = await parseStylesXlsx(buffer)
+  const { fonts, fills, borders, cellXfs, numFmts, themeColors } = await parseStylesXlsx(buffer)
 
   const xfStyleMap = new Map<number, UniverStyle>()
   for (let i = 0; i < cellXfs.length; i++) {
-    const style = buildUniverStyle(i, cellXfs, fonts, fills, borders, numFmts)
+    const style = buildUniverStyle(i, cellXfs, fonts, fills, borders, numFmts, themeColors)
     if (style && cellXfs[i].applyNumberFormat === '1') {
       const numFmtId = parseNumFmt(cellXfs[i].numFmtId) ?? 0
       if (numFmtId > 0) {
@@ -512,6 +541,42 @@ export async function importExcelFile(file: File, titleHint?: string): Promise<I
           startColumn: rng.s.c, endColumn: rng.e.c + 1,
         })
       }
+    }
+
+    // Move any value/formula found in non-anchor cells of a merge to the anchor cell.
+    // Excel stores the displayed value at the anchor; older saves sometimes leave a value
+    // on an inner cell. Univer renders the anchor's value, so this prevents the value from
+    // appearing to "disappear" when the anchor has no value of its own.
+    if (xlsxSheet['!merges']) {
+      for (const m of xlsxSheet['!merges']) {
+        const rng = typeof m === 'string' ? XLSX.utils.decode_range(m) : m as XLSX.Range
+        if (rng.s.r === rng.e.r && rng.s.c === rng.e.c) continue
+        const aAddr = XLSX.utils.encode_cell({ r: rng.s.r, c: rng.s.c })
+        const anchor = xlsxSheet[aAddr]
+        if (anchor?.v !== undefined) continue
+        for (let rr = rng.s.r; rr <= rng.e.r; rr++) {
+          for (let cc = rng.s.c; cc <= rng.e.c; cc++) {
+            if (rr === rng.s.r && cc === rng.s.c) continue
+            const iAddr = XLSX.utils.encode_cell({ r: rr, c: cc })
+            const inner = xlsxSheet[iAddr]
+            if (inner?.v !== undefined) {
+              xlsxSheet[aAddr] = { ...inner, t: inner.t, v: inner.v, f: inner.f }
+              delete xlsxSheet[iAddr]
+              break
+            }
+          }
+        }
+      }
+    }
+
+    // Identify non-anchor cells of merges so we can later detect them. We don't strip
+    // borders here: Univer's `_setMergeBorderProps` re-propagates the anchor's border to
+    // every inner cell anyway, so stripping only adds work without changing the render.
+    const mergeAnchorOf = new Map<string, XLSX.Range>()
+    for (const m of xlsxSheet['!merges'] ?? []) {
+      const rng = typeof m === 'string' ? XLSX.utils.decode_range(m) : m as XLSX.Range
+      if (rng.s.r === rng.e.r && rng.s.c === rng.e.c) continue
+      mergeAnchorOf.set(`${rng.s.r}:${rng.s.c}`, rng)
     }
 
     if (!ref) continue
@@ -699,10 +764,8 @@ function applyExcelJsStyle(cell: ExcelJS.Cell, us: UniverStyle): void {
       if (bs) {
         const style = XL_BORDER[bs.s]
         if (style) {
-          border[prop] = {
-            style,
-            color: bs.cl?.rgb ? { argb: bs.cl.rgb.replace('#', 'FF') } : { argb: 'FF000000' },
-          }
+          if (bs.cl?.rgb) border[prop] = { style, color: { argb: bs.cl.rgb.replace('#', 'FF') } }
+          else border[prop] = { style }
         }
       }
     }
