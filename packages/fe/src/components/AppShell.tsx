@@ -4,7 +4,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { createEmptyWorkbookWithId, type WorkbookSnapshot } from '@/lib/domain/workbook'
 import { workbookRepository, syncService } from '@/lib/client/composition'
 import { localDb } from '@/lib/client/db'
-import { createAdminWorkbook, getWorkbookSnapshot, listMyWorkbooks, type MyWorkbook } from '@/lib/client/admin-api'
+import { createAdminWorkbook, deleteAdminWorkbook, getWorkbookSnapshot, listMyWorkbooks, type MyWorkbook } from '@/lib/client/admin-api'
 import { downloadWorkbookAsXlsx } from '@/lib/client/xlsx-export'
 import {
   clearCachedAccount,
@@ -50,8 +50,11 @@ export default function AppShell() {
   const accountFetchInFlight = useRef<Promise<Account | null> | null>(null)
   const autoSyncInFlightRef = useRef<Promise<void> | null>(null)
   const autoSyncAccountIdRef = useRef<string | null>(null)
+  const resolvedActiveIdRef = useRef<string | undefined>(undefined)
+  const activeIdRef = useRef<string | undefined>(undefined)
 
   const resolvedActiveId = activeId ?? visibleWorkbooks[0]?.id
+  resolvedActiveIdRef.current = resolvedActiveId
   const active = visibleWorkbooks.find((item) => item.id === resolvedActiveId)
   const isAdmin = account?.role === 'admin'
 
@@ -72,8 +75,14 @@ export default function AppShell() {
       try {
         const response = await fetch('/api/me', { cache: 'no-store', credentials: 'same-origin' })
         if (!response.ok) {
-          clearCachedAccount()
-          setAccount(null)
+          // ponytail: only treat 401/403 as "session gone"; 5xx/network hiccups keep the cached account
+          // so a transient Vite proxy restart or busy BE doesn't kick the user back to the login form
+          if (response.status === 401 || response.status === 403) {
+            clearCachedAccount()
+            setAccount(null)
+          } else if (!account) {
+            setAccountResolved(true)
+          }
           return null
         }
         const payload = (await response.json()) as { user: Account }
@@ -81,6 +90,8 @@ export default function AppShell() {
         setAccount(payload.user)
         return payload.user
       } catch {
+        // ponytail: network failure ≠ session lost; leave cached account in place
+        if (!account) setAccountResolved(true)
         return null
       } finally {
         accountFetchInFlight.current = null
@@ -120,6 +131,8 @@ export default function AppShell() {
           const meta = toFetch[i]
           const snap = snapshots[i]
           if (!snap) continue
+          const existing = localById.get(meta.id)
+          if (existing?.syncState === 'deleted' || (await localDb.outbox.get(meta.id))?.deleted) continue
           await localDb.workbooks.put({
             id: meta.id,
             title: snap.title,
@@ -144,11 +157,16 @@ export default function AppShell() {
     const latest = await localDb.workbooks.get(workbookId)
     if (!latest || latest.syncState === 'deleted') return
     seededWorkbookIdRef.current = latest.id
-    setEditorSeed((prev) => ({
-      workbookId: latest.id,
-      snapshot: latest.snapshot,
-      revision: prev?.workbookId === latest.id ? prev.revision + 1 : 0,
-    }))
+    setEditorSeed((prev) => {
+      if (prev?.workbookId === latest.id && JSON.stringify(prev.snapshot) === JSON.stringify(latest.snapshot)) {
+        return prev
+      }
+      return {
+        workbookId: latest.id,
+        snapshot: latest.snapshot,
+        revision: prev?.workbookId === latest.id ? prev.revision + 1 : 0,
+      }
+    })
   }, [])
 
   const runAutoSync = useCallback(async (currentAccount: Account, reason: 'login' | 'reconnect') => {
@@ -158,15 +176,14 @@ export default function AppShell() {
       setSyncStatus('syncing')
       setSyncMessage(reason === 'reconnect' ? 'Kembali online. Menyinkronkan…' : 'Mengambil workbook terbaru dari server…')
       try {
-        if (currentAccount.role === 'admin') {
-          const pushResult = await syncService.run(currentAccount.id, currentAccount.role)
-          if (pushResult.acked > 0) {
-            setSyncMessage(`Mengirim ${pushResult.acked} perubahan lokal ke server…`)
-          }
+        const pushResult = await syncService.run(currentAccount.id, currentAccount.role)
+        if (pushResult.acked > 0) {
+          setSyncMessage(`Mengirim ${pushResult.acked} perubahan lokal ke server…`)
         }
         const remote = await syncRemoteWorkbooks()
-        if (resolvedActiveId) {
-          await reloadEditorFromDb(resolvedActiveId).catch(() => undefined)
+        const targetId = resolvedActiveIdRef.current
+        if (targetId) {
+          await reloadEditorFromDb(targetId).catch(() => undefined)
         }
         const hasConflicts = (await localDb.workbooks.toArray()).some((wb) => wb.conflict !== undefined)
         setSyncStatus(hasConflicts ? 'error' : 'done')
@@ -192,7 +209,7 @@ export default function AppShell() {
     } finally {
       autoSyncInFlightRef.current = null
     }
-  }, [syncRemoteWorkbooks, resolvedActiveId, reloadEditorFromDb])
+  }, [syncRemoteWorkbooks, reloadEditorFromDb])
 
   const pullFromServer = useCallback(async () => {
     if (!navigator.onLine) {
@@ -204,8 +221,9 @@ export default function AppShell() {
     setSyncMessage('Menarik workbook terbaru dari server…')
     try {
       const remote = await syncRemoteWorkbooks(true)
-      if (resolvedActiveId) {
-        await reloadEditorFromDb(resolvedActiveId).catch(() => undefined)
+      const targetId = resolvedActiveIdRef.current
+      if (targetId) {
+        await reloadEditorFromDb(targetId).catch(() => undefined)
       }
       setSyncStatus('done')
       setSyncMessage(
@@ -217,7 +235,7 @@ export default function AppShell() {
       setSyncStatus('error')
       setSyncMessage('Gagal menarik dari server.')
     }
-  }, [syncRemoteWorkbooks, resolvedActiveId, reloadEditorFromDb])
+  }, [syncRemoteWorkbooks, reloadEditorFromDb])
 
   const syncNow = useCallback(async () => {
     if (!navigator.onLine) {
@@ -241,8 +259,9 @@ export default function AppShell() {
       }
 
       const result = await syncService.run(currentAccount.id, currentAccount.role)
-      if (resolvedActiveId && result.remoteApplied.includes(resolvedActiveId)) {
-        await reloadEditorFromDb(resolvedActiveId)
+      const targetId = resolvedActiveIdRef.current
+      if (targetId && result.remoteApplied.includes(targetId)) {
+        await reloadEditorFromDb(targetId)
       }
 
       const hasConflicts = result.conflicts > 0 || result.remoteConflicts.length > 0
@@ -268,7 +287,7 @@ export default function AppShell() {
         setSyncMessage('Server belum dapat dijangkau. Data lokal tidak hilang.')
       }
     }
-  }, [account, loadAccount, reloadEditorFromDb, resolvedActiveId])
+  }, [account, loadAccount, reloadEditorFromDb])
 
   useEffect(() => {
     void loadAccount()
@@ -301,20 +320,26 @@ export default function AppShell() {
     if (autoSyncAccountIdRef.current === account.id) return
     autoSyncAccountIdRef.current = account.id
     void runAutoSync(account, 'login')
-  }, [account, runAutoSync])
+  }, [account?.id, runAutoSync])
 
   useEffect(() => {
     if (!online || !account) return
     void runAutoSync(account, 'reconnect')
-  }, [online, account, runAutoSync])
+  }, [online, account?.id, runAutoSync])
+
+  useEffect(() => {
+    return () => undefined
+  }, [])
 
   useEffect(() => {
     if (!workbooks || !account) return
+    if (activeIdRef.current) return
     const target = new URLSearchParams(location.search).get('workbook')
     if (!target) return
-      if (workbooks.some((wb) => wb.id === target)) {
-        void handleSwitchWorkbook(target)
-      }
+    if (workbooks.some((wb) => wb.id === target)) {
+      activeIdRef.current = target
+      void handleSwitchWorkbook(target)
+    }
   }, [workbooks, location.search, account])
 
   const handleSwitchWorkbook = useCallback(
@@ -322,6 +347,7 @@ export default function AppShell() {
       if (univerHandleRef.current && univerHandleRef.current.workbookId !== workbookId) {
         await univerHandleRef.current.forceSave()
       }
+      activeIdRef.current = workbookId
       setActiveId(workbookId)
     },
     [],
@@ -374,6 +400,7 @@ export default function AppShell() {
       const remote = await createAdminWorkbook({ title })
       const workbook = createEmptyWorkbookWithId(remote.workbookId, remote.title)
       await workbookRepository.create(workbook)
+      activeIdRef.current = workbook.id
       setActiveId(workbook.id)
     } catch (error) {
       setSyncStatus('error')
@@ -383,10 +410,24 @@ export default function AppShell() {
 
   const removeWorkbook = async () => {
     if (!active || !window.confirm(`Hapus "${active.title}"?`)) return
-    await workbookRepository.markDeleted(active.id)
-    const next = visibleWorkbooks.find((item) => item.id !== active.id)
+    const id = active.id
+    await workbookRepository.markDeleted(id)
+    const next = visibleWorkbooks.find((item) => item.id !== id)
     void handleSwitchWorkbook(next?.id ?? '')
-    if (navigator.onLine) void syncNow()
+    if (!navigator.onLine) return
+    if (account?.role === 'admin') {
+      try {
+        await deleteAdminWorkbook(id)
+      } catch (error) {
+        setSyncStatus('error')
+        setSyncMessage(error instanceof Error ? `Gagal menghapus di server: ${error.message}` : 'Gagal menghapus di server.')
+      }
+      void pullFromServer()
+    } else {
+      void syncNow().finally(() => {
+        void pullFromServer()
+      })
+    }
   }
 
   const logout = async () => {
@@ -476,6 +517,11 @@ export default function AppShell() {
         </div>
       </header>
 
+      {workbooks === undefined ? (
+        <section className="workspace" style={{ display: 'grid', placeItems: 'center' }}>
+          <div className="empty-state">Memuat daftar workbook…</div>
+        </section>
+      ) : (
       <section className="workspace">
         <aside className="sidebar">
           <div className="sidebar-heading">
@@ -586,6 +632,7 @@ export default function AppShell() {
           )}
         </section>
       </section>
+      )}
     </main>
   )
 }

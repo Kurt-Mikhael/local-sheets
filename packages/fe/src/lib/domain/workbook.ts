@@ -34,7 +34,7 @@ function newSheet(id: string, name: string): Record<string, unknown> {
     name,
     tabColor: '',
     hidden: 0,
-    rowCount: 1000,
+    rowCount: 10000,
     columnCount: 26,
     zoomRatio: 1,
     freeze: { xSplit: 0, ySplit: 0, startRow: -1, startColumn: -1 },

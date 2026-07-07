@@ -369,6 +369,21 @@ export class PostgresAccountRepository {
       [workbookId, keepCount],
     )
   }
+
+  async deleteWorkbookRow(userId: string, workbookId: string): Promise<void> {
+    await query(
+      `UPDATE workbooks SET deleted_at = NOW(), updated_at = NOW()
+       WHERE user_id = $1 AND id = $2`,
+      [userId, workbookId],
+    )
+  }
+
+  async deleteSyncOperationsForWorkbook(userId: string, workbookId: string): Promise<void> {
+    await query(
+      'DELETE FROM sync_operations WHERE user_id = $1 AND workbook_id = $2',
+      [userId, workbookId],
+    )
+  }
 }
 
 export const accountRepository = new PostgresAccountRepository()

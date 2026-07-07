@@ -27,8 +27,8 @@ const safeJsonValue: z.ZodType<unknown> = z.lazy(() =>
 )
 
 export const snapshotSchema = safeJsonValue.refine(
-  (v) => JSON.stringify(v).length < 1_000_000,
-  { message: 'Snapshot terlalu besar (maks 1MB).' },
+  (v) => JSON.stringify(v).length < 16_000_000,
+  { message: 'Snapshot terlalu besar (maks 16MB).' },
 )
 
 const titleSchema = z

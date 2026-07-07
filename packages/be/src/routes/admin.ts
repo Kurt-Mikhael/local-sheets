@@ -101,6 +101,9 @@ adminRouter.delete('/workbooks/:workbookId', asyncHandler(async (req, res) => {
 
   await accountRepository.revokeAllWorkbookAccess(workbookId)
   await accountRepository.deleteSnapshot(workbookId, owner.ownerId)
+  await accountRepository.deleteWorkbookRow(owner.ownerId, workbookId)
+  await accountRepository.deleteVersionsForWorkbook(workbookId)
+  await accountRepository.deleteSyncOperationsForWorkbook(owner.ownerId, workbookId)
 
   res.json({ ok: true, workbookId, previousOwnerId: owner.ownerId })
 }))

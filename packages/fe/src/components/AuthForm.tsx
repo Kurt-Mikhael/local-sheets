@@ -30,8 +30,13 @@ const AuthForm = ({ mode }: AuthFormProps) => {
         credentials: 'same-origin',
         body: JSON.stringify(payload),
       })
-      const result = await response.json().catch(() => ({ error: 'Respons server tidak valid.' })) as { error?: string }
+      const result = await response.json().catch(() => ({})) as { error?: string }
       if (!response.ok) {
+        // ponytail: Vite proxy-down returns 500 with empty body; 502/503/504 only appear behind a real reverse proxy
+        if (response.status >= 500 && !result.error) {
+          setError('Backend lokal tidak merespons. Pastikan `pnpm dev` (FE + BE) berjalan.')
+          return
+        }
         setError(result.error ?? 'Autentikasi gagal.')
         return
       }

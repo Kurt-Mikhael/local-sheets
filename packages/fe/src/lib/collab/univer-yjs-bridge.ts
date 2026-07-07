@@ -33,7 +33,7 @@ export function applyYjsCellsToSnapshot(
     if (!sheet.cellData[row]) sheet.cellData[row] = {}
 
     const data = cellMap.toJSON() as CellMap
-    if (data.v === undefined && data.f === undefined && data.s === undefined) {
+    if (data.v === undefined && data.f === undefined && data.s === undefined && data.t === undefined) {
       delete sheet.cellData[row][col]
       return
     }

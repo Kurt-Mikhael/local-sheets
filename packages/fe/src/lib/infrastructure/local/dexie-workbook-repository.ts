@@ -27,6 +27,7 @@ export class DexieWorkbookRepository {
     await localDb.transaction('rw', localDb.workbooks, localDb.outbox, async () => {
       const current = await localDb.workbooks.get(id)
       if (!current) throw new Error('Workbook lokal tidak ditemukan.')
+      if (current.syncState === 'deleted') return
 
       const updated: LocalWorkbook = {
         ...current,
