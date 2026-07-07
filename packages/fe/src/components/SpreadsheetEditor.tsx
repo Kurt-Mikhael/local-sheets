@@ -43,7 +43,7 @@ export default function SpreadsheetEditor({
     const host = hostRef.current
     if (!host) return
 
-    let saveTimer: ReturnType<typeof setTimeout> | undefined
+    let saveTimer: number | undefined
     let disposed = false
     const cleanupFns: Array<() => void> = []
 
