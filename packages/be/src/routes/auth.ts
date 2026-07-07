@@ -5,7 +5,7 @@ import { authRateLimiter, emailRateLimiter } from '../lib/rate-limit.js'
 import { accountRepository } from '../repositories/account-repository.js'
 import { assertMutationRequest, HttpError } from '../lib/security.js'
 import { asyncHandler } from '../lib/async-handler.js'
-import { attachSessionCookie, createSession, clearSession } from '../lib/session.js'
+import { attachSessionCookie, createSession, clearSession, SESSION_COOKIE } from '../lib/session.js'
 import cookie from 'cookie'
 import { authSchema } from '../../../shared/src/schemas.js'
 
@@ -85,7 +85,7 @@ authRouter.post('/logout', asyncHandler(async (req, res) => {
 // same session token in the JSON body so the client can pass it via the WS query string.
 authRouter.get('/ws-token', asyncHandler(async (req, res) => {
   const cookies = cookie.parse(req.headers.cookie ?? '')
-  const token = cookies[process.env.NODE_ENV === 'production' ? '__Host-localsheet_session' : 'localsheet_session']
+  const token = cookies[SESSION_COOKIE]
   if (!token) throw new HttpError(401, 'Login diperlukan.')
   res.json({ token })
 }))
