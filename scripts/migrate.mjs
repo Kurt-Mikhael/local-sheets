@@ -15,17 +15,25 @@ if (!connectionString) {
 const client = new pg.Client({ connectionString })
 await client.connect()
 try {
-  // ponytail: forward GUC params into the migration session. Env vars
-  // prefixed APP_GUC_ become session-local settings via set_config.
-  // The GUC key is the env var name with the prefix stripped, lowercased,
-  // and underscores preserved (no auto-mapping). Migration 006 reads
-  // 'app.super_admin_email' so the env var must be exactly
-  // APP_GUC_APP.SUPER_ADMIN_EMAIL — but env names can't contain dots, so
-  // use APP_GUC_APP_SUPER_ADMIN_EMAIL and the GUC key is
-  // app_super_admin_email; the migration reads that key instead.
-  const gucParams = Object.entries(process.env)
-    .filter(([k]) => k.startsWith('APP_GUC_'))
-    .map(([k, v]) => [k.slice('APP_GUC_'.length).toLowerCase(), v])
+  // ponytail: forward GUC params into the migration session. Migration 006
+  // reads 'app.super_admin_email'. Env var names can't contain dots, so the
+  // env var is APP_GUC_SUPER_ADMIN_EMAIL and we set the GUC key explicitly
+  // (no auto-mapping — env-name conventions break when GUC keys have
+  // underscores of their own, like super_admin).
+  const gucValues = []
+  if (process.env.APP_GUC_SUPER_ADMIN_EMAIL) {
+    gucValues.push(['app.super_admin_email', process.env.APP_GUC_SUPER_ADMIN_EMAIL])
+  }
+  if (gucValues.length > 0) {
+    console.log(`[migrate] forwarding GUC params: ${gucValues.map(([k, v]) => `${k}=${v}`).join(', ')}`)
+    const sets = gucValues
+      .map(([,], i) => `set_config($${i * 2 + 1}, $${i * 2 + 2}, true)`)
+      .join(', ')
+    const params = gucValues.flatMap(([k, v]) => [k, v])
+    await client.query(`SELECT ${sets}`, params)
+  } else {
+    console.log('[migrate] no APP_GUC_* env vars found in process.env')
+  }
   if (gucParams.length > 0) {
     console.log(`[migrate] forwarding GUC params: ${gucParams.map(([k, v]) => `${k}=${v}`).join(', ')}`)
     const sets = gucParams
