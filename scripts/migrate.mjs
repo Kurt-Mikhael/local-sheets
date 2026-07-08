@@ -23,11 +23,14 @@ try {
     .filter(([k]) => k.startsWith('APP_GUC_'))
     .map(([k, v]) => [k.slice('APP_GUC_'.length).toLowerCase().replace(/_/g, '.'), v])
   if (gucParams.length > 0) {
+    console.log(`[migrate] forwarding GUC params: ${gucParams.map(([k, v]) => `${k}=${v}`).join(', ')}`)
     const sets = gucParams
       .map(([k, v], i) => `set_config($${i + 1}, $${i + 2}, true)`)
       .join(', ')
     const values = gucParams.flatMap(([k, v]) => [k, v])
     await client.query(`SELECT ${sets}`, values)
+  } else {
+    console.log('[migrate] no APP_GUC_* env vars found in process.env')
   }
 
   const migrationsDir = path.join(process.cwd(), 'db', 'migrations')
