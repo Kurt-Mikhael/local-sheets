@@ -526,7 +526,6 @@ function UserPanel({ users, currentUserId, isSuperAdmin, busy, setBusy, setError
                     >
                       <option value="user">user</option>
                       <option value="admin">admin</option>
-                      <option value="super_admin">super_admin</option>
                     </select>
                   ) : (
                     <span className={`role-badge role-${u.role}`}>{u.role}</span>
