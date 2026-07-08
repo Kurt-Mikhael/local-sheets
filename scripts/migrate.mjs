@@ -34,16 +34,6 @@ try {
   } else {
     console.log('[migrate] no APP_GUC_* env vars found in process.env')
   }
-  if (gucParams.length > 0) {
-    console.log(`[migrate] forwarding GUC params: ${gucParams.map(([k, v]) => `${k}=${v}`).join(', ')}`)
-    const sets = gucParams
-      .map(([k, v], i) => `set_config($${i + 1}, $${i + 2}, true)`)
-      .join(', ')
-    const values = gucParams.flatMap(([k, v]) => [k, v])
-    await client.query(`SELECT ${sets}`, values)
-  } else {
-    console.log('[migrate] no APP_GUC_* env vars found in process.env')
-  }
 
   const migrationsDir = path.join(process.cwd(), 'db', 'migrations')
   const files = (await fs.readdir(migrationsDir)).filter((name) => name.endsWith('.sql')).sort()
