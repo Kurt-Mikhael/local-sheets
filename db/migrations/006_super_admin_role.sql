@@ -16,18 +16,18 @@ BEGIN
 END
 $$;
 
--- Seed super_admin pertama berdasarkan GUC 'app_super_admin_email'
--- (di-supply saat deploy lewat env APP_GUC_APP_SUPER_ADMIN_EMAIL=...
+-- Seed super_admin pertama berdasarkan GUC 'app.super_admin_email'
+-- (di-supply saat deploy lewat env APP_GUC_SUPER_ADMIN_EMAIL=...
 -- yang di-forward oleh scripts/migrate.mjs ke session Postgres).
 -- Migration ini idempotent: kalau user belum ada, dilewati; kalau
 -- sudah ada, di-promote.
 DO $$
 DECLARE
-  target_email TEXT := current_setting('app_super_admin_email', true);
+  target_email TEXT := current_setting('app.super_admin_email', true);
   target_id    UUID;
 BEGIN
   IF target_email IS NULL OR target_email = '' THEN
-    RAISE NOTICE 'app_super_admin_email tidak di-set, lewati seed super_admin';
+    RAISE NOTICE 'app.super_admin_email tidak di-set, lewati seed super_admin';
     RETURN;
   END IF;
 
