@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { query } from '../lib/postgres.js'
 
+export type UserRole = 'user' | 'admin' | 'super_admin'
+
 interface UserRow {
   id: string
   email: string
   password_hash: string
-  role: 'user' | 'admin'
+  role: UserRole
 }
 
 interface SessionUserRow {
@@ -13,20 +15,20 @@ interface SessionUserRow {
   expires_at: Date
   user_id: string
   email: string
-  role: 'user' | 'admin'
+  role: UserRole
 }
 
 export interface AccountUser {
   id: string
   email: string
   passwordHash: string
-  role: 'user' | 'admin'
+  role: UserRole
 }
 
 export interface SessionUser {
   sessionId: string
   expiresAt: Date
-  user: { id: string; email: string; role: 'user' | 'admin' }
+  user: { id: string; email: string; role: UserRole }
 }
 
 export class PostgresAccountRepository {
@@ -41,19 +43,31 @@ export class PostgresAccountRepository {
       : null
   }
 
+  async findUserById(id: string): Promise<{ id: string; email: string; role: UserRole } | null> {
+    const result = await query<{ id: string; email: string; role: UserRole }>(
+      'SELECT id, email, role FROM users WHERE id = $1 LIMIT 1',
+      [id],
+    )
+    return result.rows[0] ?? null
+  }
+
   async createUser(
     email: string,
     passwordHash: string,
-    role: 'user' | 'admin' = 'user',
-  ): Promise<{ id: string; email: string; role: 'user' | 'admin' }> {
+    role: UserRole = 'user',
+  ): Promise<{ id: string; email: string; role: UserRole }> {
     const id = randomUUID()
-    const result = await query<{ id: string; email: string; role: 'user' | 'admin' }>(
+    const result = await query<{ id: string; email: string; role: UserRole }>(
       `INSERT INTO users (id, email, password_hash, role)
        VALUES ($1, $2, $3, $4)
        RETURNING id, email, role`,
       [id, email, passwordHash, role],
     )
     return result.rows[0]
+  }
+
+  async updateUserRole(userId: string, role: UserRole): Promise<void> {
+    await query('UPDATE users SET role = $1 WHERE id = $2', [role, userId])
   }
 
   async createSession(userId: string, tokenHash: string, expiresAt: Date): Promise<void> {
@@ -230,10 +244,11 @@ export class PostgresAccountRepository {
   // when admin creates a workbook, createEmptySnapshot inserts under admin's user_id,
   // so the row is theirs and shows up here. left-join `workbooks` for live title;
   // fallback to a placeholder when only the snapshot row exists.
-  async listWorkbooksByOwner(ownerId: string): Promise<Array<{ id: string; title: string; ownerEmail: string; ownerRole: string }>> {
-    const result = await query<{ workbook_id: string; title: string; email: string; role: string }>(
+  async listWorkbooksByOwner(ownerId: string): Promise<Array<{ id: string; ownerId: string; title: string; ownerEmail: string; ownerRole: string }>> {
+    const result = await query<{ workbook_id: string; user_id: string; title: string; email: string; role: string }>(
       `SELECT DISTINCT ON (s.workbook_id)
               s.workbook_id,
+              s.user_id,
               COALESCE(NULLIF(w.title, ''), s.title) AS title,
               u.email,
               u.role
@@ -246,16 +261,18 @@ export class PostgresAccountRepository {
     )
     return result.rows.map((r) => ({
       id: r.workbook_id,
+      ownerId: r.user_id,
       title: r.title,
       ownerEmail: r.email,
       ownerRole: r.role,
     }))
   }
 
-  async listAllWorkbooksForAdmin(): Promise<Array<{ id: string; title: string; ownerEmail: string; ownerRole: string }>> {
-    const result = await query<{ workbook_id: string; title: string; email: string; role: string }>(
+  async listAllWorkbooks(): Promise<Array<{ id: string; ownerId: string; title: string; ownerEmail: string; ownerRole: string }>> {
+    const result = await query<{ workbook_id: string; user_id: string; title: string; email: string; role: string }>(
       `SELECT DISTINCT ON (s.workbook_id)
               s.workbook_id,
+              s.user_id,
               COALESCE(NULLIF(w.title, ''), s.title) AS title,
               u.email,
               u.role
@@ -267,6 +284,7 @@ export class PostgresAccountRepository {
     )
     return result.rows.map((r) => ({
       id: r.workbook_id,
+      ownerId: r.user_id,
       title: r.title,
       ownerEmail: r.email,
       ownerRole: r.role,
@@ -301,8 +319,8 @@ export class PostgresAccountRepository {
     return result.rowCount !== null && result.rowCount > 0
   }
 
-  async listAllUsers(): Promise<Array<{ id: string; email: string; role: 'user' | 'admin' }>> {
-    const result = await query<{ id: string; email: string; role: 'user' | 'admin' }>(
+  async listAllUsers(): Promise<Array<{ id: string; email: string; role: UserRole }>> {
+    const result = await query<{ id: string; email: string; role: UserRole }>(
       'SELECT id, email, role FROM users ORDER BY created_at ASC',
     )
     return result.rows

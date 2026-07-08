@@ -1,4 +1,4 @@
-import type { Account } from './account-cache'
+import type { Account, Role } from './account-cache'
 
 export type AdminUser = Account
 
@@ -12,10 +12,11 @@ export interface AdminWorkbook {
   id: string
   title: string
   ownerEmail: string
+  ownerRole?: Role
 }
 
 interface AdminInit {
-  method?: 'GET' | 'POST' | 'DELETE'
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
   body?: unknown
 }
 
@@ -60,6 +61,12 @@ export const listAdminUsers = () =>
 export const createAdminUser = (payload: { email: string; password: string }) =>
   adminFetch<{ user: AdminUser }>('/users', { method: 'POST', body: payload }).then((r) => r.user)
 
+export const updateUserRole = (userId: string, role: Role) =>
+  adminFetch<{ ok: true; userId: string; role: Role }>(`/users/${userId}/role`, {
+    method: 'PATCH',
+    body: { role },
+  })
+
 export const shareWorkbook = (workbookId: string, email: string) =>
   adminFetch<{ userId: string; email: string }>(`/workbooks/${workbookId}/share`, {
     method: 'POST',
@@ -76,7 +83,7 @@ export interface MyWorkbook {
   id: string
   title: string
   ownerEmail: string
-  ownerRole: 'user' | 'admin'
+  ownerRole: Role
   version: number
   updatedAt: string
 }

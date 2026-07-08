@@ -18,7 +18,7 @@ export class SyncService {
     private readonly transport: HttpSyncTransport,
   ) {}
 
-  run(accountId: string, accountRole: 'user' | 'admin' = 'user'): Promise<SyncRunResult> {
+  run(accountId: string, accountRole: 'user' | 'admin' | 'super_admin' = 'user'): Promise<SyncRunResult> {
     if (this.running) {
       if (this.runningAccountId !== accountId) {
         return Promise.reject(new Error('LOCAL_ACCOUNT_MISMATCH'))

@@ -1,7 +1,9 @@
+export type Role = 'user' | 'admin' | 'super_admin'
+
 export interface Account {
   id: string
   email: string
-  role: 'user' | 'admin'
+  role: Role
 }
 
 const ACCOUNT_CACHE_KEY = 'localsheet:last-account'
@@ -10,7 +12,7 @@ function parse(raw: string | null): Account | null {
   if (!raw) return null
   try {
     const parsed = JSON.parse(raw) as Account
-    if (!parsed.id || !parsed.email || (parsed.role !== 'user' && parsed.role !== 'admin')) {
+    if (!parsed.id || !parsed.email || (parsed.role !== 'user' && parsed.role !== 'admin' && parsed.role !== 'super_admin')) {
       return null
     }
     return parsed

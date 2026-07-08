@@ -60,7 +60,7 @@ export default function AppShell() {
   const resolvedActiveId = activeId ?? visibleWorkbooks[0]?.id
   resolvedActiveIdRef.current = resolvedActiveId
   const active = visibleWorkbooks.find((item) => item.id === resolvedActiveId)
-  const isAdmin = account?.role === 'admin'
+  const isAdmin = account?.role === 'admin' || account?.role === 'super_admin'
 
   useEffect(() => {
     if (active && active.title !== renameValue) setRenameValue(active.title)
@@ -419,7 +419,7 @@ export default function AppShell() {
     const next = visibleWorkbooks.find((item) => item.id !== id)
     void handleSwitchWorkbook(next?.id ?? '')
     if (!navigator.onLine) return
-    if (account?.role === 'admin') {
+    if (account?.role === 'admin' || account?.role === 'super_admin') {
       try {
         await deleteAdminWorkbook(id)
       } catch (error) {
@@ -504,7 +504,7 @@ export default function AppShell() {
 
           {account ? (
             <>
-              {account.role === 'admin' && (
+              {(account.role === 'admin' || account.role === 'super_admin') && (
                 <Link to="/admin" className="text-button">Panel Admin</Link>
               )}
               <span className="account-label">{account.email}</span>
@@ -655,7 +655,7 @@ export default function AppShell() {
               <h2>Belum ada workbook yang dibagikan</h2>
               <p>Hubungi admin untuk meng-assign workbook agar kamu bisa mulai mengerjakannya.</p>
             </div>
-          ) : account && account.role === 'admin' ? (
+          ) : account && (account.role === 'admin' || account.role === 'super_admin') ? (
             <div className="empty-state empty-state-message">
               <h2>Belum ada workbook</h2>
               <p>Klik tombol + di sidebar untuk membuat workbook baru.</p>

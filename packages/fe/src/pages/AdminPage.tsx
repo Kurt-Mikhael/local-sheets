@@ -14,13 +14,14 @@ import {
   restoreWorkbookVersion,
   revokeWorkbook,
   shareWorkbook,
+  updateUserRole,
   type AdminUser,
   type AdminWorkbook,
   type WorkbookAccess,
   type WorkbookVersion,
 } from '@/lib/client/admin-api'
 import { importExcelFile } from '@/lib/client/excel-import'
-import { readCachedAccount, type Account } from '@/lib/client/account-cache'
+import { readCachedAccount, type Account, type Role } from '@/lib/client/account-cache'
 
 type Tab = 'workbooks' | 'users'
 
@@ -79,7 +80,7 @@ export default function AdminPage() {
   }, [])
 
   useEffect(() => {
-    if (account?.role !== 'admin') return
+    if (account?.role !== 'admin' && account?.role !== 'super_admin') return
     void refreshWorkbooks()
     void refreshUsers()
   }, [account, refreshWorkbooks, refreshUsers])
@@ -104,7 +105,7 @@ export default function AdminPage() {
     )
   }
 
-  if (account.role !== 'admin') {
+  if (account.role !== 'admin' && account.role !== 'super_admin') {
     return (
       <main className="auth-page">
         <section className="auth-card">
@@ -154,7 +155,15 @@ export default function AdminPage() {
           navigate={navigate}
         />
       ) : (
-        <UserPanel users={users} busy={busy} setBusy={setBusy} setError={setError} onChanged={refreshUsers} />
+        <UserPanel
+          users={users}
+          currentUserId={account.id}
+          isSuperAdmin={account.role === 'super_admin'}
+          busy={busy}
+          setBusy={setBusy}
+          setError={setError}
+          onChanged={refreshUsers}
+        />
       )}
     </main>
   )
@@ -422,13 +431,15 @@ function AccessPanel({ workbookId, users, setError, onChanged }: AccessPanelProp
 
 interface UserPanelProps {
   users: AdminUser[]
+  currentUserId: string
+  isSuperAdmin: boolean
   busy: boolean
   setBusy: (v: boolean) => void
   setError: (msg: string) => void
   onChanged: () => Promise<void>
 }
 
-function UserPanel({ users, busy, setBusy, setError, onChanged }: UserPanelProps) {
+function UserPanel({ users, currentUserId, isSuperAdmin, busy, setBusy, setError, onChanged }: UserPanelProps) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
 
@@ -442,6 +453,19 @@ function UserPanel({ users, busy, setBusy, setError, onChanged }: UserPanelProps
       await onChanged()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Gagal membuat user')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleRoleChange(userId: string, role: Role) {
+    setError('')
+    setBusy(true)
+    try {
+      await updateUserRole(userId, role)
+      await onChanged()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Gagal mengubah role')
     } finally {
       setBusy(false)
     }
@@ -484,12 +508,32 @@ function UserPanel({ users, busy, setBusy, setError, onChanged }: UserPanelProps
           <p className="muted">Belum ada user.</p>
         ) : (
           <ul className="admin-list">
-            {users.map((u) => (
-              <li key={u.id} className="admin-list-item simple">
-                <span>{u.email}</span>
-                <span className={`role-badge role-${u.role}`}>{u.role}</span>
-              </li>
-            ))}
+            {users.map((u) => {
+              const isSelf = u.id === currentUserId
+              return (
+                <li key={u.id} className="admin-list-item simple">
+                  <span>
+                    {u.email}
+                    {isSelf && <span className="muted"> (Anda)</span>}
+                  </span>
+                  {isSuperAdmin ? (
+                    <select
+                      value={u.role}
+                      disabled={busy || isSelf}
+                      onChange={(e) => void handleRoleChange(u.id, e.target.value as Role)}
+                      className={`role-badge role-${u.role}`}
+                      title={isSelf ? 'Anda tidak dapat mengubah role sendiri' : 'Ubah role'}
+                    >
+                      <option value="user">user</option>
+                      <option value="admin">admin</option>
+                      <option value="super_admin">super_admin</option>
+                    </select>
+                  ) : (
+                    <span className={`role-badge role-${u.role}`}>{u.role}</span>
+                  )}
+                </li>
+              )
+            })}
           </ul>
         )}
       </div>

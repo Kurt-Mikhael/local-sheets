@@ -504,6 +504,7 @@ button:disabled { cursor: not-allowed; opacity: .6; }
 }
 .role-badge.role-admin { background: #ede9fe; color: #5b21b6; }
 .role-badge.role-user { background: #e0f2fe; color: #075985; }
+.role-badge.role-super_admin { background: #fee2e2; color: #991b1b; }
 .admin-list-item.simple {
   display: flex;
   align-items: center;

@@ -3,7 +3,7 @@ import * as Y from 'yjs'
 export interface CollabAccount {
   id: string
   email: string
-  role: 'user' | 'admin'
+  role: 'user' | 'admin' | 'super_admin'
 }
 
 export interface CellMap {

@@ -48,7 +48,7 @@ export class PostgresSyncRepository {
   async processChanges(
     userId: string,
     changes: SyncChangeInput[],
-    userRole: 'user' | 'admin' = 'user',
+    userRole: 'user' | 'admin' | 'super_admin' = 'user',
   ): Promise<{ acked: SyncAck[]; conflicts: SyncConflict[] }> {
     return withTransaction(async (client) => {
       await client.query('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE')
@@ -80,7 +80,7 @@ export class PostgresSyncRepository {
         }
 
         let workbookOwnerId = userId
-        if (userRole === 'user') {
+        if (userRole === 'user' || userRole === 'super_admin') {
           const owner = await client.query<{ user_id: string }>(
             'SELECT user_id FROM workbook_snapshots WHERE workbook_id = $1 LIMIT 1',
             [change.workbookId],
@@ -89,12 +89,14 @@ export class PostgresSyncRepository {
             throw new HttpError(404, 'Workbook tidak ditemukan.')
           }
           workbookOwnerId = owner.rows[0].user_id
-          const access = await client.query(
-            'SELECT 1 FROM workbook_access WHERE user_id = $1 AND workbook_id = $2 LIMIT 1',
-            [userId, change.workbookId],
-          )
-          if ((access.rowCount ?? 0) === 0) {
-            throw new HttpError(403, 'Anda tidak memiliki akses ke workbook ini.')
+          if (userRole === 'user') {
+            const access = await client.query(
+              'SELECT 1 FROM workbook_access WHERE user_id = $1 AND workbook_id = $2 LIMIT 1',
+              [userId, change.workbookId],
+            )
+            if ((access.rowCount ?? 0) === 0) {
+              throw new HttpError(403, 'Anda tidak memiliki akses ke workbook ini.')
+            }
           }
         }
 
@@ -108,7 +110,7 @@ export class PostgresSyncRepository {
 
         const current = existing.rows[0]
 
-        if (!current && userRole !== 'admin') {
+        if (!current && userRole === 'user') {
           throw new HttpError(403, 'Hanya admin yang dapat membuat workbook baru.')
         }
 

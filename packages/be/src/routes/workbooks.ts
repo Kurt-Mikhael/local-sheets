@@ -23,7 +23,26 @@ workbooksRouter.get('/', asyncHandler(async (req, res) => {
 
   const items: WorkbookListItem[] = []
 
-  if (user.role === 'admin') {
+  if (user.role === 'super_admin') {
+    const all = await accountRepository.listAllWorkbooks()
+    for (const wb of all) {
+      const ownerId = wb.ownerId
+      let data: WorkbookData = null
+      try {
+        data = await accountRepository.findWorkbookData(ownerId, wb.id)
+      } catch (err) {
+        console.error('[workbooks] findWorkbookData failed for', wb.id, err)
+      }
+      items.push({
+        id: wb.id,
+        title: wb.title,
+        ownerEmail: wb.ownerEmail,
+        ownerRole: wb.ownerRole === 'super_admin' ? 'super_admin' : wb.ownerRole === 'admin' ? 'admin' : 'user',
+        version: data?.version ?? 0,
+        updatedAt: data?.updatedAt ?? new Date().toISOString(),
+      })
+    }
+  } else if (user.role === 'admin') {
     const own = await accountRepository.listWorkbooksByOwner(user.id)
     for (const wb of own) {
       let data: WorkbookData = null
@@ -79,7 +98,8 @@ workbooksRouter.get('/:id/snapshot', asyncHandler(async (req, res) => {
   if (!owner) throw new HttpError(404, 'Workbook tidak ditemukan.')
 
   const isOwner = owner.ownerId === user.id
-  if (!isOwner) {
+  const isSuperAdmin = user.role === 'super_admin'
+  if (!isOwner && !isSuperAdmin) {
     const granted = await accountRepository.userHasWorkbookAccess(user.id, workbookId)
     if (!granted) throw new HttpError(403, 'Anda tidak memiliki akses ke workbook ini.')
   }

@@ -66,7 +66,7 @@ export async function clearSession(req: IncomingMessage, res: ServerResponse): P
   res.setHeader('Set-Cookie', clearCookie)
 }
 
-export async function getCurrentUser(req: IncomingMessage): Promise<{ id: string; email: string; role: 'user' | 'admin' } | null> {
+export async function getCurrentUser(req: IncomingMessage): Promise<{ id: string; email: string; role: 'user' | 'admin' | 'super_admin' } | null> {
   const cookies = cookie.parse(req.headers.cookie ?? '')
   const token = cookies[SESSION_COOKIE]
   if (!token) return null

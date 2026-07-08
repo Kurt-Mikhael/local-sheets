@@ -10,9 +10,14 @@ import { workbookAdminRateLimiter } from '../lib/rate-limit.js'
 
 export const adminRouter = Router()
 
-function ensureAdmin(user: { id: string; email: string; role: 'user' | 'admin' } | null): asserts user is { id: string; email: string; role: 'admin' } {
+function ensureAdmin(user: { id: string; email: string; role: 'user' | 'admin' | 'super_admin' } | null): asserts user is { id: string; email: string; role: 'admin' | 'super_admin' } {
   if (!user) throw new HttpError(401, 'Login diperlukan.')
-  if (user.role !== 'admin') throw new HttpError(403, 'Hanya admin yang dapat mengelola workbook.')
+  if (user.role !== 'admin' && user.role !== 'super_admin') throw new HttpError(403, 'Hanya admin yang dapat mengelola workbook.')
+}
+
+function ensureSuperAdmin(user: { id: string; email: string; role: 'user' | 'admin' | 'super_admin' } | null): asserts user is { id: string; email: string; role: 'super_admin' } {
+  if (!user) throw new HttpError(401, 'Login diperlukan.')
+  if (user.role !== 'super_admin') throw new HttpError(403, 'Hanya super admin yang dapat melakukan aksi ini.')
 }
 
 function param(req: { params: Record<string, string | string[] | undefined> }, key: string): string {
@@ -54,6 +59,9 @@ adminRouter.post('/workbooks', asyncHandler(async (req, res) => {
 
   const workbookId = parsed.data.workbookId ?? randomUUID()
   const ownerId = parsed.data.userId ?? user.id
+  if (parsed.data.userId && user.role !== 'super_admin' && parsed.data.userId !== user.id) {
+    throw new HttpError(403, 'Hanya super admin yang dapat membuat workbook untuk user lain.')
+  }
   const title = parsed.data.title
 
   await accountRepository.createEmptySnapshot(ownerId, workbookId, title)
@@ -160,7 +168,10 @@ adminRouter.get('/users', asyncHandler(async (req, res) => {
 adminRouter.get('/workbooks', asyncHandler(async (req, res) => {
   const user = await getCurrentUser(req)
   ensureAdmin(user)
-  res.json({ workbooks: await accountRepository.listAllWorkbooksForAdmin() })
+  const workbooks = user.role === 'super_admin'
+    ? await accountRepository.listAllWorkbooks()
+    : await accountRepository.listWorkbooksByOwner(user.id)
+  res.json({ workbooks })
 }))
 
 adminRouter.post('/users', asyncHandler(async (req, res) => {
@@ -189,6 +200,30 @@ adminRouter.post('/users', asyncHandler(async (req, res) => {
 
   const created = await accountRepository.createUser(parsed.data.email, passwordHash, 'user')
   res.status(201).json({ user: { id: created.id, email: created.email, role: created.role } })
+}))
+
+const updateUserRoleSchema = z.object({
+  role: z.enum(['user', 'admin', 'super_admin']),
+})
+
+adminRouter.patch('/users/:userId/role', asyncHandler(async (req, res) => {
+  assertMutationRequest(req)
+  const user = await getCurrentUser(req)
+  ensureSuperAdmin(user)
+
+  const userId = param(req, 'userId')
+  const parsed = updateUserRoleSchema.safeParse(req.body ?? {})
+  if (!parsed.success) throw new HttpError(400, 'Role tidak valid.')
+
+  if (userId === user.id && parsed.data.role !== 'super_admin') {
+    throw new HttpError(400, 'Anda tidak dapat menurunkan role Anda sendiri.')
+  }
+
+  const target = await accountRepository.findUserById(userId)
+  if (!target) throw new HttpError(404, 'User tidak ditemukan.')
+
+  await accountRepository.updateUserRole(userId, parsed.data.role)
+  res.json({ ok: true, userId, role: parsed.data.role })
 }))
 
 // ponytail: workbook version history endpoints
