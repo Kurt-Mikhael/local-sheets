@@ -4,24 +4,15 @@
 -- promote user lain (hanya super_admin yang bisa promote).
 -- =====================================================
 
--- Drop constraint lama dan pasang ulang dengan nilai baru. Idempotent:
--- kalau constraint sudah up-to-date, di-skip via DO block supaya migrate
--- ulang (mis. setelah register super_admin) tidak error.
+-- Drop constraint lama (baik yang dari 003 maupun constraint up-to-date)
+-- dan pasang ulang dengan nilai baru. Idempotent.
 DO $$
 BEGIN
-  IF EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname = 'users_role_check'
-      AND conrelid = 'users'::regclass
-      AND pg_get_constraintdef(oid) = 'CHECK ((role = ANY (ARRAY[''user''::character varying, ''admin''::character varying, ''super_admin''::character varying])))'
-  ) THEN
-    RAISE NOTICE 'users_role_check sudah up-to-date, skip';
-  ELSE
-    ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
-    ALTER TABLE users
-      ADD CONSTRAINT users_role_check
-      CHECK (role IN ('user', 'admin', 'super_admin'));
-  END IF;
+  ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+  ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check_legacy;
+  ALTER TABLE users
+    ADD CONSTRAINT users_role_check
+    CHECK (role IN ('user', 'admin', 'super_admin'));
 END
 $$;
 
