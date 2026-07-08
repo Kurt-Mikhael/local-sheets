@@ -14,7 +14,7 @@ import { InMemoryRateLimiter } from '../lib/rate-limit.js'
 const MESSAGE_SYNC = 0
 const MESSAGE_AWARENESS = 1
 
-const MAX_MESSAGE_BYTES = 10 * 1024 * 1024 // ponytail: 256KB was too small for sync state; bumped to 10MB
+const MAX_MESSAGE_BYTES = 10 * 1024 * 1024 // ponytail: bumped from 256KB to 10MB
 const connLimiter = new InMemoryRateLimiter(60, 10_000)
 
 interface Room {
@@ -154,7 +154,8 @@ setInterval(() => {
 
 let connIdCounter = 0
 const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES })
-wss.on('error', () => { /* ponytail: noop, individual ws error handlers catch the rest */ })
+
+wss.on('error', () => { /* noop */ })
 
 wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
   const roomName = (req.url ?? '/').slice(1).split('?')[0]
@@ -190,9 +191,8 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     }
   })
 
-  // ponytail: silence WS-level errors (e.g. oversized messages) so they don't crash the server
-  ws.on('error', () => { /* noop */ })
 
+  ws.on('error', () => { /* noop */ })
   sendSyncStep1(ws, room)
 })
 
