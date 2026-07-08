@@ -47,6 +47,10 @@ export default function AppShell() {
   const lastAccountFetchAt = useRef<number>(0)
   const univerHandleRef = useRef<{ workbookId: string; getSnapshot: () => WorkbookSnapshot | null; forceSave: () => Promise<void> } | null>(null)
   const [exporting, setExporting] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    if (typeof localStorage === 'undefined') return false
+    return localStorage.getItem('sidebarCollapsed') === '1'
+  })
   const accountFetchInFlight = useRef<Promise<Account | null> | null>(null)
   const autoSyncInFlightRef = useRef<Promise<void> | null>(null)
   const autoSyncAccountIdRef = useRef<string | null>(null)
@@ -523,19 +527,33 @@ export default function AppShell() {
         </section>
       ) : (
       <section className="workspace">
-        <aside className="sidebar">
+        <aside className={`sidebar ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
           <div className="sidebar-heading">
             <h2>Workbook</h2>
-            {isAdmin && (
+            <div className="sidebar-heading-actions">
+              {isAdmin && (
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={() => void createWorkbook()}
+                  aria-label="Buat workbook"
+                >
+                  +
+                </button>
+              )}
               <button
                 type="button"
                 className="icon-button"
-                onClick={() => void createWorkbook()}
-                aria-label="Buat workbook"
+                onClick={() => {
+                  setSidebarCollapsed(true)
+                  try { localStorage.setItem('sidebarCollapsed', '1') } catch {}
+                }}
+                aria-label="Tutup sidebar"
+                title="Tutup sidebar"
               >
-                +
+                «
               </button>
-            )}
+            </div>
           </div>
 
           <div className="workbook-list">
@@ -557,6 +575,21 @@ export default function AppShell() {
             <p>IndexedDB menyimpan data sebelum server menerimanya.</p>
           </div>
         </aside>
+
+        {sidebarCollapsed && (
+          <button
+            type="button"
+            className="sidebar-expand-handle"
+            onClick={() => {
+              setSidebarCollapsed(false)
+              try { localStorage.setItem('sidebarCollapsed', '0') } catch {}
+            }}
+            aria-label="Buka sidebar"
+            title="Buka sidebar"
+          >
+            »
+          </button>
+        )}
 
         <section className="editor-panel">
           {active && editorSeed ? (
