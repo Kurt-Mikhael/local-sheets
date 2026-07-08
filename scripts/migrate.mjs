@@ -17,20 +17,15 @@ await client.connect()
 try {
   // ponytail: forward GUC params into the migration session. Env vars
   // prefixed APP_GUC_ become session-local settings via set_config.
-  // Use double underscore in the env name to map to a single underscore
-  // in the GUC key, and single underscore to map to a dot — so
-  // APP_GUC_APP__SUPER_ADMIN_EMAIL → app.super_admin_email GUC key.
+  // The GUC key is the env var name with the prefix stripped, lowercased,
+  // and underscores preserved (no auto-mapping). Migration 006 reads
+  // 'app.super_admin_email' so the env var must be exactly
+  // APP_GUC_APP.SUPER_ADMIN_EMAIL — but env names can't contain dots, so
+  // use APP_GUC_APP_SUPER_ADMIN_EMAIL and the GUC key is
+  // app_super_admin_email; the migration reads that key instead.
   const gucParams = Object.entries(process.env)
     .filter(([k]) => k.startsWith('APP_GUC_'))
-    .map(([k, v]) => [
-      k
-        .slice('APP_GUC_'.length)
-        .toLowerCase()
-        .replace(/__/g, '\x00')
-        .replace(/_/g, '.')
-        .replace(/\x00/g, '_'),
-      v,
-    ])
+    .map(([k, v]) => [k.slice('APP_GUC_'.length).toLowerCase(), v])
   if (gucParams.length > 0) {
     console.log(`[migrate] forwarding GUC params: ${gucParams.map(([k, v]) => `${k}=${v}`).join(', ')}`)
     const sets = gucParams
