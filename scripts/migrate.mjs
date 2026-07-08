@@ -9,7 +9,11 @@ if (!connectionString) {
   process.exit(1)
 }
 
-const pool = new pg.Pool({ connectionString })
+// ponytail: pakai single Client (bukan Pool) supaya GUC set_config(..., true)
+// stay di session yang sama untuk semua migration. Pool bisa ambil connection
+// berbeda tiap query dan GUC session-local bakal hilang.
+const client = new pg.Client({ connectionString })
+await client.connect()
 try {
   // ponytail: forward GUC params into the migration session. Env vars
   // prefixed APP_GUC_ become session-local settings via set_config.
@@ -23,16 +27,16 @@ try {
       .map(([k, v], i) => `set_config($${i + 1}, $${i + 2}, true)`)
       .join(', ')
     const values = gucParams.flatMap(([k, v]) => [k, v])
-    await pool.query(`SELECT ${sets}`, values)
+    await client.query(`SELECT ${sets}`, values)
   }
 
   const migrationsDir = path.join(process.cwd(), 'db', 'migrations')
   const files = (await fs.readdir(migrationsDir)).filter((name) => name.endsWith('.sql')).sort()
   for (const file of files) {
     const sql = await fs.readFile(path.join(migrationsDir, file), 'utf8')
-    await pool.query(sql)
+    await client.query(sql)
     console.log(`Applied ${file}`)
   }
 } finally {
-  await pool.end()
+  await client.end()
 }
