@@ -1,4 +1,4 @@
-import type { SyncChange } from 'shared/src/workbook'
+import type { SyncChange, SyncResponse } from 'shared/src/workbook'
 import type { DexieWorkbookRepository } from '../infrastructure/local/dexie-workbook-repository'
 import type { HttpSyncTransport } from '../infrastructure/remote/http-sync-transport'
 
@@ -57,7 +57,22 @@ export class SyncService {
         clientUpdatedAt: item.updatedAt,
       }))
 
-      const response = await this.transport.synchronize({ clientId, cursor, changes })
+      let response: SyncResponse
+      try {
+        response = await this.transport.synchronize({ clientId, cursor, changes })
+      } catch (error) {
+        // ponytail: server rejected push (e.g. protected cell, forbidden). drop the offending pending batch
+        // so the next sync doesn't re-send it; user can re-edit and re-sync the next change.
+        const status = (error as Error & { status?: number })?.status
+        const msg = error instanceof Error ? error.message : ''
+        if (status === 403 || status === 400 || /forbidden|dilindungi/i.test(msg)) {
+          for (const item of pending) {
+            await this.repository.dropPending(item.workbookId)
+          }
+          break
+        }
+        throw error
+      }
 
       for (const ack of response.acked) {
         await this.repository.applyAck(ack.workbookId, ack.operationId, ack.version)

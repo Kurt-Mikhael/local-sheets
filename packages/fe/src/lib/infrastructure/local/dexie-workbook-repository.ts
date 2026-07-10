@@ -79,6 +79,10 @@ export class DexieWorkbookRepository {
     return localDb.outbox.orderBy('updatedAt').limit(limit).toArray()
   }
 
+  async dropPending(workbookId: string): Promise<void> {
+    await localDb.outbox.delete(workbookId)
+  }
+
   async applyAck(workbookId: string, operationId: string, serverVersion: number): Promise<void> {
     await localDb.transaction('rw', localDb.workbooks, localDb.outbox, async () => {
       const [workbook, pending] = await Promise.all([

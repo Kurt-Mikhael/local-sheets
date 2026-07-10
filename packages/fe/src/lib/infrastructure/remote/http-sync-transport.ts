@@ -17,8 +17,15 @@ export class HttpSyncTransport {
       throw new Error('LOGIN_REQUIRED')
     }
     if (!response.ok) {
-      const message = await response.text().catch(() => '')
-      throw new Error(message || `Sinkronisasi gagal (${response.status}).`)
+      const raw = await response.text().catch(() => '')
+      let message = raw
+      try {
+        const parsed = JSON.parse(raw) as { error?: string }
+        if (parsed?.error) message = parsed.error
+      } catch {}
+      const err = new Error(message || `Sinkronisasi gagal (${response.status}).`)
+      ;(err as Error & { status?: number }).status = response.status
+      throw err
     }
 
     return response.json() as Promise<SyncResponse>
