@@ -67,6 +67,25 @@ export default function SpreadsheetEditor({
       ],
     })
 
+    // ponytail: scrub Univer's built-in protect/permission UI from toolbar + context menu — app ships its own protection flow
+    const scrubProtectUI = () => {
+      document.querySelectorAll<HTMLElement>('[data-u-command*="rotect" i], [data-u-command*="ermission" i]').forEach((el) => el.remove())
+      document.querySelectorAll<HTMLElement>('button, [role="menuitem"], [role="button"]').forEach((el) => {
+        const text = (el.textContent ?? '').trim()
+        if (/^protect (rows|columns|sheet|range|range$)/i.test(text)
+          || /^allow edit ranges?$/i.test(text)
+          || /^protect (rows|columns|sheet)$/i.test(text)) {
+          el.remove()
+        }
+      })
+    }
+    scrubProtectUI()
+    const mo = new MutationObserver(scrubProtectUI)
+    mo.observe(document.body, { childList: true, subtree: true })
+    const scrubInterval = window.setInterval(scrubProtectUI, 500)
+    cleanupFns.push(() => mo.disconnect())
+    cleanupFns.push(() => window.clearInterval(scrubInterval))
+
     let unitId: string | null = null
     let collabCells: Y.Map<Y.Map<unknown>> | null = null
     let collabAwareness: import('y-protocols/awareness').Awareness | null = null
@@ -181,8 +200,33 @@ export default function SpreadsheetEditor({
     }
 
     let lastCommandAt = 0
+    let prevSnapshot = univerAPI.getActiveWorkbook()?.save() as WorkbookSnapshot | undefined
+    let revertingDepth = 0
     const disposable = univerAPI.onCommandExecuted(() => {
+      if (revertingDepth > 0) return
       lastCommandAt = Date.now()
+      const activeWb = univerAPI.getActiveWorkbook()
+      const nextSnapshot = activeWb?.save() as WorkbookSnapshot | undefined
+      if (prevSnapshot && nextSnapshot && account) {
+        const blocked = detectProtectedCellChange(prevSnapshot, nextSnapshot, account.role)
+        if (blocked) {
+          // ponytail: revert only the cells that violated, not the whole range — guard re-entry with depth counter
+          revertingDepth += 1
+          try {
+            revertChangedProtectedCells(prevSnapshot, nextSnapshot, activeWb as never)
+          } finally {
+            // ponytail: defer decrement so any command fired synchronously by setValue still sees the guard
+            setTimeout(() => { revertingDepth -= 1 }, 0)
+          }
+          if (typeof window !== 'undefined') {
+            const message = 'Sel dilindungi. Hanya admin yang bisa edit.'
+            window.dispatchEvent(new CustomEvent('localsheet:protection-block', { detail: { message } }))
+          }
+          prevSnapshot = (activeWb?.save() as unknown as WorkbookSnapshot | undefined) ?? prevSnapshot
+          return
+        }
+      }
+      prevSnapshot = nextSnapshot
       if (saveTimer) clearTimeout(saveTimer)
       const schedule = (cb: () => void) => {
         // ponytail: defer local IDB write into idle time so the editor stays responsive mid-typing
@@ -424,4 +468,111 @@ function setupPointerPan(host: HTMLElement, cleanupFns: Array<() => void>): void
     workbench.removeEventListener('pointercancel', onPointerUp)
     workbench.removeEventListener('click', swallowIfPanned, { capture: true } as EventListenerOptions)
   })
+}
+
+function colLabel(index: number): string {
+  let s = ''
+  let n = index
+  while (true) {
+    s = String.fromCharCode(65 + (n % 26)) + s
+    n = Math.floor(n / 26) - 1
+    if (n < 0) break
+  }
+  return s
+}
+
+function detectProtectedCellChange(
+  prev: WorkbookSnapshot,
+  next: WorkbookSnapshot,
+  role: string,
+): string | null {
+  if (role === 'admin' || role === 'super_admin') return null
+  const prevSheets = ((prev as { sheets?: unknown }).sheets && typeof (prev as { sheets?: unknown }).sheets === 'object'
+    ? (prev as { sheets: Record<string, unknown> }).sheets : {}) as Record<string, unknown>
+  const nextSheets = ((next as { sheets?: unknown }).sheets && typeof (next as { sheets?: unknown }).sheets === 'object'
+    ? (next as { sheets: Record<string, unknown> }).sheets : {}) as Record<string, unknown>
+  for (const [sheetId, nextSheetRaw] of Object.entries(nextSheets)) {
+    const nextSheet = (nextSheetRaw && typeof nextSheetRaw === 'object' ? nextSheetRaw : {}) as Record<string, unknown>
+    const prevSheet = (prevSheets[sheetId] && typeof prevSheets[sheetId] === 'object' ? prevSheets[sheetId] : {}) as Record<string, unknown>
+    const rangesRaw = nextSheet.protectedRanges
+    if (!Array.isArray(rangesRaw) || rangesRaw.length === 0) continue
+    const nextData = (typeof nextSheet.cellData === 'object' && nextSheet.cellData) as Record<string, unknown> | null
+    const prevData = (typeof prevSheet.cellData === 'object' && prevSheet.cellData) as Record<string, unknown> | null
+    if (!nextData) continue
+    for (const [rowKey, nextRowRaw] of Object.entries(nextData)) {
+      const row = Number(rowKey)
+      if (!Number.isInteger(row)) continue
+      const nextRow = (nextRowRaw && typeof nextRowRaw === 'object' ? nextRowRaw : {}) as Record<string, unknown>
+      const prevRow = (prevData && prevData[rowKey] && typeof prevData[rowKey] === 'object' ? prevData[rowKey] : {}) as Record<string, unknown>
+      for (const [colKey, nextCell] of Object.entries(nextRow)) {
+        const col = Number(colKey)
+        if (!Number.isInteger(col)) continue
+        const prevCell = prevRow[colKey]
+        if (JSON.stringify(prevCell ?? null) === JSON.stringify(nextCell ?? null)) continue
+        for (const r of rangesRaw) {
+          const range = (r as { range?: { startRow: number; startColumn: number; endRow: number; endColumn: number } }).range
+          if (!range) continue
+          if (row >= range.startRow && row <= range.endRow && col >= range.startColumn && col <= range.endColumn) {
+            return `${sheetId}!${colLabel(col)}${row + 1}`
+          }
+        }
+      }
+    }
+  }
+  return null
+}
+
+function revertChangedProtectedCells(
+  prev: WorkbookSnapshot,
+  next: WorkbookSnapshot,
+  wb: { getSheets?: () => Array<{ getSheetId?: () => string; getRange: (r: number, c: number, h: number, w: number) => { setValue: (v: unknown) => void } }> },
+): void {
+  if (typeof wb.getSheets !== 'function') return
+  const sheets = wb.getSheets() ?? []
+  const sheetById = new Map<string, { getRange: (r: number, c: number, h: number, w: number) => { setValue: (v: unknown) => void } }>()
+  for (const s of sheets) {
+    const sid = (s as { getSheetId?: () => string }).getSheetId?.()
+    if (sid) sheetById.set(sid, s as never)
+  }
+  const prevSheets = ((prev as { sheets?: unknown }).sheets && typeof (prev as { sheets?: unknown }).sheets === 'object'
+    ? (prev as { sheets: Record<string, unknown> }).sheets : {}) as Record<string, unknown>
+  const nextSheets = ((next as { sheets?: unknown }).sheets && typeof (next as { sheets?: unknown }).sheets === 'object'
+    ? (next as { sheets: Record<string, unknown> }).sheets : {}) as Record<string, unknown>
+  for (const [sheetId, nextSheetRaw] of Object.entries(nextSheets)) {
+    const sheet = sheetById.get(sheetId)
+    if (!sheet) continue
+    const nextSheet = (nextSheetRaw && typeof nextSheetRaw === 'object' ? nextSheetRaw : {}) as Record<string, unknown>
+    const prevSheet = (prevSheets[sheetId] && typeof prevSheets[sheetId] === 'object' ? prevSheets[sheetId] : {}) as Record<string, unknown>
+    const rangesRaw = nextSheet.protectedRanges
+    if (!Array.isArray(rangesRaw) || rangesRaw.length === 0) continue
+    const nextData = (typeof nextSheet.cellData === 'object' && nextSheet.cellData) as Record<string, unknown> | null
+    const prevData = (typeof prevSheet.cellData === 'object' && prevSheet.cellData) as Record<string, unknown> | null
+    if (!nextData) continue
+    for (const [rowKey, nextRowRaw] of Object.entries(nextData)) {
+      const row = Number(rowKey)
+      if (!Number.isInteger(row)) continue
+      const nextRow = (nextRowRaw && typeof nextRowRaw === 'object' ? nextRowRaw : {}) as Record<string, unknown>
+      const prevRow = (prevData && prevData[rowKey] && typeof prevData[rowKey] === 'object' ? prevData[rowKey] : {}) as Record<string, unknown>
+      for (const [colKey] of Object.entries(nextRow)) {
+        const col = Number(colKey)
+        if (!Number.isInteger(col)) continue
+        const prevCell = prevRow[colKey]
+        const nextCell = nextRow[colKey]
+        if (JSON.stringify(prevCell ?? null) === JSON.stringify(nextCell ?? null)) continue
+        let inRange = false
+        for (const r of rangesRaw) {
+          const range = (r as { range?: { startRow: number; startColumn: number; endRow: number; endColumn: number } }).range
+          if (!range) continue
+          if (row >= range.startRow && row <= range.endRow && col >= range.startColumn && col <= range.endColumn) {
+            inRange = true
+            break
+          }
+        }
+        if (!inRange) continue
+        try {
+          sheet.getRange(row, col, 1, 1).setValue((prevCell ?? {}) as never)
+        } catch {}
+      }
+    }
+  }
 }

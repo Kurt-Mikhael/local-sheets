@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg'
 import { query, withTransaction } from '../lib/postgres.js'
 import { HttpError } from '../lib/security.js'
 import type { SyncCursor } from '../lib/cursor.js'
+import { isCellInProtectedRange, type ProtectedRange } from '../../../shared/src/workbook.js'
 
 interface SyncChangeInput {
   operationId: string
@@ -42,6 +43,108 @@ interface WorkbookVersionRow {
   title: string
   snapshot: Record<string, unknown>
   deleted: boolean
+}
+
+interface CellRef {
+  sheetId: string
+  row: number
+  column: number
+}
+
+function extractProtectedRanges(snapshot: unknown): Map<string, ProtectedRange[]> {
+  const result = new Map<string, ProtectedRange[]>()
+  if (!snapshot || typeof snapshot !== 'object') return result
+  const snap = snapshot as Record<string, unknown>
+  const sheets = snap.sheets
+  if (!sheets || typeof sheets !== 'object') return result
+  for (const [sheetId, sheet] of Object.entries(sheets as Record<string, unknown>)) {
+    if (!sheet || typeof sheet !== 'object') continue
+    const ranges = (sheet as Record<string, unknown>).protectedRanges
+    if (!Array.isArray(ranges)) continue
+    const valid: ProtectedRange[] = []
+    for (const r of ranges) {
+      if (!r || typeof r !== 'object') continue
+      const range = (r as Record<string, unknown>).range as ProtectedRange['range'] | undefined
+      const allowedRoles = (r as Record<string, unknown>).allowedRoles
+      const id = (r as Record<string, unknown>).id
+      if (
+        typeof id === 'string'
+        && range
+        && typeof range.startRow === 'number'
+        && typeof range.startColumn === 'number'
+        && typeof range.endRow === 'number'
+        && typeof range.endColumn === 'number'
+        && Array.isArray(allowedRoles)
+        && allowedRoles.every((role) => role === 'admin' || role === 'super_admin')
+      ) {
+        valid.push({
+          id,
+          range,
+          allowedRoles: allowedRoles as ProtectedRange['allowedRoles'],
+        })
+      }
+    }
+    if (valid.length > 0) result.set(sheetId, valid)
+  }
+  return result
+}
+
+function* iterateCellChanges(
+  prev: unknown,
+  next: unknown,
+): Generator<CellRef> {
+  const prevSnap = (prev && typeof prev === 'object' ? prev : {}) as Record<string, unknown>
+  const nextSnap = (next && typeof next === 'object' ? next : {}) as Record<string, unknown>
+  const prevSheets = (prevSnap.sheets && typeof prevSnap.sheets === 'object' ? prevSnap.sheets : {}) as Record<string, unknown>
+  const nextSheets = (nextSnap.sheets && typeof nextSnap.sheets === 'object' ? nextSnap.sheets : {}) as Record<string, unknown>
+  const sheetIds = new Set<string>([...Object.keys(prevSheets), ...Object.keys(nextSheets)])
+  for (const sheetId of sheetIds) {
+    const prevSheet = prevSheets[sheetId]
+    const nextSheet = nextSheets[sheetId]
+    const prevData = (prevSheet && typeof prevSheet === 'object' ? (prevSheet as Record<string, unknown>).cellData : null) as Record<string, unknown> | null
+    const nextData = (nextSheet && typeof nextSheet === 'object' ? (nextSheet as Record<string, unknown>).cellData : null) as Record<string, unknown> | null
+    if (!nextData) continue
+    const rows = new Set<string>([...Object.keys(prevData ?? {}), ...Object.keys(nextData)])
+    for (const rowKey of rows) {
+      const row = Number(rowKey)
+      if (!Number.isInteger(row)) continue
+      const prevRow = (prevData?.[rowKey] && typeof prevData[rowKey] === 'object' ? prevData[rowKey] : null) as Record<string, unknown> | null
+      const nextRow = (nextData[rowKey] && typeof nextData[rowKey] === 'object' ? nextData[rowKey] : null) as Record<string, unknown> | null
+      if (!nextRow) continue
+      const cols = new Set<string>([...Object.keys(prevRow ?? {}), ...Object.keys(nextRow)])
+      for (const colKey of cols) {
+        const col = Number(colKey)
+        if (!Number.isInteger(col)) continue
+        const prevCell = prevRow?.[colKey]
+        const nextCell = nextRow[colKey]
+        if (JSON.stringify(prevCell ?? null) !== JSON.stringify(nextCell ?? null)) {
+          yield { sheetId, row, column: col }
+        }
+      }
+    }
+  }
+}
+
+function assertProtectionAllowsEdits(
+  prev: unknown,
+  next: unknown,
+  role: 'user' | 'admin' | 'super_admin',
+): void {
+  if (role === 'admin' || role === 'super_admin') return
+  const rangesBySheet = extractProtectedRanges(prev)
+  if (rangesBySheet.size === 0) return
+  for (const cell of iterateCellChanges(prev, next)) {
+    const ranges = rangesBySheet.get(cell.sheetId)
+    if (!ranges) continue
+    for (const range of ranges) {
+      if (isCellInProtectedRange(cell.row, cell.column, range.range)) {
+        throw new HttpError(
+          403,
+          `Sel ${cell.sheetId}!${cell.row + 1}:${String.fromCharCode(65 + cell.column)} dilindungi. Hanya admin/super_admin yang dapat mengedit.`,
+        )
+      }
+    }
+  }
 }
 
 export class PostgresSyncRepository {
@@ -125,6 +228,8 @@ export class PostgresSyncRepository {
           })
           continue
         }
+
+        assertProtectionAllowsEdits(current?.snapshot ?? null, change.snapshot, userRole)
 
         const newVersion = (current?.version ?? 0) + 1
 

@@ -80,3 +80,29 @@ export interface SyncResponse {
   cursor?: string
   hasMore: boolean
 }
+
+export type ProtectionRole = 'admin' | 'super_admin'
+
+export interface ProtectedRange {
+  id: string
+  range: {
+    startRow: number
+    startColumn: number
+    endRow: number
+    endColumn: number
+  }
+  allowedRoles: ProtectionRole[]
+}
+
+export const DEFAULT_PROTECTION_ROLES: ProtectionRole[] = ['admin', 'super_admin']
+
+export function isCellInProtectedRange(
+  row: number,
+  column: number,
+  range: ProtectedRange['range'],
+): boolean {
+  return row >= range.startRow
+    && row <= range.endRow
+    && column >= range.startColumn
+    && column <= range.endColumn
+}

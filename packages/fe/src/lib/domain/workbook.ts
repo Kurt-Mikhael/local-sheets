@@ -10,7 +10,10 @@ import type {
   RemoteWorkbook,
   SyncRequest,
   SyncResponse,
+  ProtectedRange,
+  ProtectionRole,
 } from 'shared/src/workbook'
+import { DEFAULT_PROTECTION_ROLES, isCellInProtectedRange } from 'shared/src/workbook'
 
 export type {
   WorkbookSnapshot,
@@ -24,7 +27,11 @@ export type {
   RemoteWorkbook,
   SyncRequest,
   SyncResponse,
+  ProtectedRange,
+  ProtectionRole,
 }
+
+export { DEFAULT_PROTECTION_ROLES, isCellInProtectedRange }
 
 export const UNIVER_APP_VERSION = '0.25.0'
 

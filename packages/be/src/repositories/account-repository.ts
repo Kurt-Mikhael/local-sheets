@@ -154,6 +154,19 @@ export class PostgresAccountRepository {
     )
   }
 
+  async updateWorkbookSnapshot(
+    userId: string,
+    workbookId: string,
+    snapshot: Record<string, unknown>,
+    title: string,
+  ): Promise<void> {
+    await query(
+      `UPDATE workbooks SET snapshot = $3::jsonb, title = $4, updated_at = NOW()
+       WHERE user_id = $1 AND id = $2`,
+      [userId, workbookId, JSON.stringify(snapshot), title],
+    )
+  }
+
   async renameSnapshot(userId: string, workbookId: string, title: string): Promise<void> {
     await query(
       `UPDATE workbook_snapshots SET title = $3, updated_at = NOW()

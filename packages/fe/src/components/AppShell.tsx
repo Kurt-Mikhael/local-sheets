@@ -4,8 +4,9 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { createEmptyWorkbookWithId, type WorkbookSnapshot } from '@/lib/domain/workbook'
 import { workbookRepository, syncService } from '@/lib/client/composition'
 import { localDb } from '@/lib/client/db'
-import { createAdminWorkbook, deleteAdminWorkbook, getWorkbookSnapshot, listMyWorkbooks, type MyWorkbook } from '@/lib/client/admin-api'
+import { createAdminWorkbook, deleteAdminWorkbook, getWorkbookSnapshot, listMyWorkbooks, updateWorkbookProtection, type MyWorkbook } from '@/lib/client/admin-api'
 import { downloadWorkbookAsXlsx } from '@/lib/client/xlsx-export'
+import type { ProtectedRange } from 'shared/src/workbook'
 import {
   clearCachedAccount,
   readCachedAccount,
@@ -42,6 +43,7 @@ export default function AppShell() {
   const [syncMessage, setSyncMessage] = useState('')
   const [editorSeed, setEditorSeed] = useState<EditorSeed | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const [protectOpen, setProtectOpen] = useState(false)
 
   const seededWorkbookIdRef = useRef<string | null>(null)
   const lastAccountFetchAt = useRef<number>(0)
@@ -293,6 +295,18 @@ export default function AppShell() {
     }
   }, [account, loadAccount, reloadEditorFromDb])
 
+  const [protectToast, setProtectToast] = useState('')
+  useEffect(() => {
+    const onBlock = (e: Event) => {
+      const detail = (e as CustomEvent<{ message?: string }>).detail
+      const msg = detail?.message ?? 'Sel dilindungi. Hanya admin/super_admin yang bisa edit.'
+      setProtectToast(msg)
+      window.setTimeout(() => setProtectToast(''), 2500)
+    }
+    window.addEventListener('localsheet:protection-block', onBlock)
+    return () => window.removeEventListener('localsheet:protection-block', onBlock)
+  }, [])
+
   useEffect(() => {
     void loadAccount()
     const onOnline = () => {
@@ -373,6 +387,17 @@ export default function AppShell() {
       univerHandleRef.current = null
     }
   }, [activeId])
+
+  const handleProtectionUpdated = useCallback(async (snapshot: WorkbookSnapshot) => {
+    if (!active) return
+    try {
+      await workbookRepository.saveSnapshot(active.id, snapshot)
+      await reloadEditorFromDb(active.id)
+    } catch (error) {
+      setSyncStatus('error')
+      setSyncMessage(error instanceof Error ? `Gagal memperbarui proteksi: ${error.message}` : 'Gagal memperbarui proteksi.')
+    }
+  }, [active, reloadEditorFromDb])
 
   const exportActiveWorkbook = async () => {
     const handle = univerHandleRef.current
@@ -522,7 +547,7 @@ export default function AppShell() {
       </header>
 
       {workbooks === undefined ? (
-        <section className="workspace" style={{ display: 'grid', placeItems: 'center' }}>
+        <section className="workspace" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div className="empty-state">Memuat daftar workbook…</div>
         </section>
       ) : (
@@ -619,6 +644,16 @@ export default function AppShell() {
                     {exporting ? 'Menyiapkan…' : 'Download Excel'}
                   </button>
                   {isAdmin && (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => setProtectOpen(true)}
+                      title="Lindungi rentang sel agar hanya admin yang bisa edit"
+                    >
+                      Lindungi Sel
+                    </button>
+                  )}
+                  {isAdmin && (
                     <button type="button" className="danger-button" onClick={() => void removeWorkbook()}>
                       Hapus
                     </button>
@@ -638,6 +673,15 @@ export default function AppShell() {
               )}
 
               {syncMessage && <div className={`sync-message status-${syncStatus}`}>{syncMessage}</div>}
+
+              {isAdmin && protectOpen && (
+                <ProtectRangeDialog
+                  workbookId={active.id}
+                  snapshot={active.snapshot}
+                  onClose={() => setProtectOpen(false)}
+                  onUpdated={handleProtectionUpdated}
+                />
+              )}
 
               <Suspense fallback={<div className="editor-loading">Memuat mesin spreadsheet…</div>}>
                 <SpreadsheetEditor
@@ -666,6 +710,228 @@ export default function AppShell() {
         </section>
       </section>
       )}
+      {protectToast && <div className="protect-toast" role="status">{protectToast}</div>}
     </main>
+  )
+}
+
+interface ProtectRangeDialogProps {
+  workbookId: string
+  snapshot: WorkbookSnapshot
+  onClose: () => void
+  onUpdated: (snapshot: WorkbookSnapshot) => Promise<void>
+}
+
+interface SheetOption {
+  id: string
+  name: string
+  ranges: ProtectedRange[]
+}
+
+function colLabel(index: number): string {
+  let s = ''
+  let n = index
+  while (true) {
+    s = String.fromCharCode(65 + (n % 26)) + s
+    n = Math.floor(n / 26) - 1
+    if (n < 0) break
+  }
+  return s
+}
+
+function rangeToText(r: ProtectedRange['range']): string {
+  return `${colLabel(r.startColumn)}${r.startRow + 1}:${colLabel(r.endColumn)}${r.endRow + 1}`
+}
+
+function parseCellRef(ref: string): { row: number; column: number } | null {
+  const m = /^([A-Z]+)(\d+)$/.exec(ref.trim().toUpperCase())
+  if (!m) return null
+  let col = 0
+  for (const ch of m[1]) col = col * 26 + (ch.charCodeAt(0) - 64)
+  return { row: Number(m[2]) - 1, column: col - 1 }
+}
+
+function readSheets(snapshot: WorkbookSnapshot): SheetOption[] {
+  const raw = (snapshot as { sheets?: unknown }).sheets
+  if (!raw || typeof raw !== 'object') return []
+  return Object.entries(raw as Record<string, unknown>).map(([id, value]) => {
+    const sheet = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+    const ranges = Array.isArray(sheet.protectedRanges) ? (sheet.protectedRanges as ProtectedRange[]) : []
+    return { id, name: String(sheet.name ?? id), ranges }
+  })
+}
+
+function ProtectRangeDialog({ workbookId, snapshot, onClose, onUpdated }: ProtectRangeDialogProps) {
+  const [sheets, setSheets] = useState<SheetOption[]>(() => readSheets(snapshot))
+  const [activeSheetId, setActiveSheetId] = useState<string>(() => sheets[0]?.id ?? '')
+  const [rangeText, setRangeText] = useState('')
+  const [allowAdmin, setAllowAdmin] = useState(true)
+  const [allowSuper, setAllowSuper] = useState(true)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const activeSheet = sheets.find((s) => s.id === activeSheetId) ?? null
+
+  function mergeSheet(updated: ProtectedRange[]): SheetOption[] {
+    return sheets.map((s) => (s.id === activeSheetId ? { ...s, ranges: updated } : s))
+  }
+
+  async function handleAdd() {
+    setError('')
+    if (!activeSheet) {
+      setError('Pilih sheet dulu.')
+      return
+    }
+    const parts = rangeText.split(':')
+    if (parts.length !== 2) {
+      setError('Format range harus A1:B5')
+      return
+    }
+    const start = parseCellRef(parts[0])
+    const end = parseCellRef(parts[1])
+    if (!start || !end) {
+      setError('Range tidak valid. Contoh: A1:B5')
+      return
+    }
+    const allowed: ProtectedRange['allowedRoles'] = []
+    if (allowAdmin) allowed.push('admin')
+    if (allowSuper) allowed.push('super_admin')
+    if (allowed.length === 0) {
+      setError('Pilih minimal satu role yang boleh edit.')
+      return
+    }
+    const range: ProtectedRange['range'] = {
+      startRow: Math.min(start.row, end.row),
+      startColumn: Math.min(start.column, end.column),
+      endRow: Math.max(start.row, end.row),
+      endColumn: Math.max(start.column, end.column),
+    }
+    const next: ProtectedRange[] = [
+      ...activeSheet.ranges,
+      { id: crypto.randomUUID(), range, allowedRoles: allowed },
+    ]
+    setBusy(true)
+    try {
+      const res = await updateWorkbookProtection(workbookId, activeSheet.id, next)
+      setSheets(mergeSheet(next))
+      setRangeText('')
+      await onUpdated(res.snapshot as WorkbookSnapshot)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Gagal menyimpan proteksi')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleRemove(rangeId: string) {
+    if (!activeSheet) return
+    const next = activeSheet.ranges.filter((r) => r.id !== rangeId)
+    setBusy(true)
+    setError('')
+    try {
+      const res = await updateWorkbookProtection(workbookId, activeSheet.id, next)
+      setSheets(mergeSheet(next))
+      await onUpdated(res.snapshot as WorkbookSnapshot)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Gagal menghapus proteksi')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div
+      className="protect-range-overlay"
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div className="protect-range-dialog">
+        <header className="protect-range-header">
+          <h3>Lindungi sel</h3>
+          <button type="button" className="text-button" onClick={onClose} aria-label="Tutup">✕</button>
+        </header>
+
+        {sheets.length === 0 ? (
+          <p className="muted">Workbook belum punya sheet.</p>
+        ) : (
+          <>
+            <div className="form-row">
+              <label className="muted">Sheet:</label>
+              <select
+                value={activeSheetId}
+                onChange={(e) => setActiveSheetId(e.target.value)}
+                disabled={busy}
+              >
+                {sheets.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="form-row">
+              <input
+                type="text"
+                placeholder="Range (mis. A1:B5)"
+                value={rangeText}
+                onChange={(e) => setRangeText(e.target.value.toUpperCase())}
+                disabled={busy}
+              />
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={allowAdmin}
+                  onChange={(e) => setAllowAdmin(e.target.checked)}
+                  disabled={busy}
+                />
+                admin
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={allowSuper}
+                  onChange={(e) => setAllowSuper(e.target.checked)}
+                  disabled={busy}
+                />
+                super_admin
+              </label>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => void handleAdd()}
+                disabled={busy || !rangeText.trim()}
+              >
+                + Lindungi
+              </button>
+            </div>
+
+            {error && <p className="error-text">{error}</p>}
+
+            {activeSheet && activeSheet.ranges.length > 0 && (
+              <ul className="admin-list">
+                {activeSheet.ranges.map((r) => (
+                  <li key={r.id} className="admin-list-item simple">
+                    <div>
+                      <strong>{rangeToText(r.range)}</strong>
+                      <span className="muted"> · {r.allowedRoles.join(', ')}</span>
+                    </div>
+                    <div className="admin-list-actions">
+                      <button
+                        type="button"
+                        className="danger-button"
+                        onClick={() => void handleRemove(r.id)}
+                        disabled={busy}
+                      >
+                        Hapus
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+      </div>
+    </div>
   )
 }

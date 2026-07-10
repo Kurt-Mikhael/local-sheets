@@ -1,4 +1,5 @@
 import type { Account, Role } from './account-cache'
+import type { ProtectedRange } from 'shared/src/workbook'
 
 export type AdminUser = Account
 
@@ -16,7 +17,7 @@ export interface AdminWorkbook {
 }
 
 interface AdminInit {
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE' | 'PUT'
   body?: unknown
 }
 
@@ -36,6 +37,33 @@ async function adminFetch<T>(path: string, init: AdminInit = {}): Promise<T> {
   }
   return (await res.json()) as T
 }
+
+async function workbookFetch<T>(path: string, init: AdminInit = {}): Promise<T> {
+  const res = await fetch(`/api/workbooks${path}`, {
+    method: init.method ?? 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Requested-With': 'offline-spreadsheet',
+    },
+    credentials: 'same-origin',
+    body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+  })
+  if (!res.ok) {
+    const err = (await res.json().catch(() => null)) as { error?: string } | null
+    throw new Error(err?.error ?? `Request gagal (HTTP ${res.status})`)
+  }
+  return (await res.json()) as T
+}
+
+export const updateWorkbookProtection = (
+  workbookId: string,
+  sheetId: string,
+  ranges: ProtectedRange[],
+) =>
+  workbookFetch<{ ok: true; snapshot: Record<string, unknown> }>(
+    `/${workbookId}/protection`,
+    { method: 'PUT', body: { sheetId, ranges } },
+  )
 
 export const listAdminWorkbooks = () =>
   adminFetch<{ workbooks: AdminWorkbook[] }>('/workbooks').then((r) => r.workbooks)
