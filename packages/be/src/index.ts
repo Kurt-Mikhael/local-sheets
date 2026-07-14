@@ -26,6 +26,9 @@ const trustProxy = process.env.TRUST_PROXY ?? 'loopback'
 app.set('trust proxy', trustProxy)
 
 app.use(globalRateLimiter)
+// ponytail: import membawa snapshot utuh (10MB+ untuk file yang lewat beberapa ribu sel),
+// jadi parser dengan limit lebih tinggi dipasang khusus untuk path itu sebelum parser global 5MB.
+app.use('/api/admin/workbooks/import', express.json({ limit: '50mb' }))
 app.use(express.json({ limit: '5mb' }))
 app.use(express.urlencoded({ extended: false }))
 

@@ -650,7 +650,7 @@ export default function AppShell() {
                       onClick={() => setProtectOpen(true)}
                       title="Lindungi rentang sel agar hanya admin yang bisa edit"
                     >
-                      Lindungi Sel
+                      Protect Cell
                     </button>
                   )}
                   {isAdmin && (
