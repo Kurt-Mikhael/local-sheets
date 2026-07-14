@@ -6,7 +6,6 @@ import {
   createWorkbookVersion,
   deleteAdminWorkbook,
   deleteWorkbookVersion,
-  importAdminWorkbook,
   listAdminUsers,
   listAdminWorkbooks,
   listWorkbookAccess,
@@ -203,8 +202,7 @@ function WorkbookPanel({ workbooks, users, busy, setBusy, setError, onChanged, n
     setError('')
     setBusy(true)
     try {
-      const imported = await importExcelFile(file)
-      const result = await importAdminWorkbook({ title: imported.title, snapshot: imported.snapshot })
+      const result = await importExcelFile(file)
       await onChanged()
       setSelectedId(result.workbookId)
     } catch (e) {
@@ -269,7 +267,7 @@ function WorkbookPanel({ workbooks, users, busy, setBusy, setError, onChanged, n
             disabled={busy}
             onClick={() => importInputRef.current?.click()}
           >
-            Import Excel (.xlsx)
+            {busy ? 'Membaca file…' : 'Import Excel (.xlsx)'}
           </button>
         </div>
       </div>
